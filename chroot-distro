@@ -88,23 +88,59 @@ safe_mount() {
 # Cleanup function to unmount everything
 command_unmount_system_points() {
     distro_name="$1"
-    if [ -z "$distro_name" ] || [ ! -d "${INSTALLED_ROOTFS_DIR}/${distro_name}" ]; then
+    rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}"
+    if [ -z "$distro_name" ] || [ ! -d "$rootfs" ]; then
         return 1
     fi
 
-    # Unmount in reverse order
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stderr" 2>/dev/null || true
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stdout" 2>/dev/null || true
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stdin" 2>/dev/null || true
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/fd" 2>/dev/null || true
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/random" 2>/dev/null || true
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys" 2>/dev/null || true
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc" 2>/dev/null || true
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev" 2>/dev/null || true
+    # Unmount shared tmp if used
+    if [ "$make_termux_tmp_shared" = "true" ]; then
+        busybox umount "${rootfs}/tmp" 2>/dev/null || true
+    fi
 
-    # Unmount any additional custom mounts (this is simplified)
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp" 2>/dev/null || true
-    busybox umount "${INSTALLED_ROOTFS_DIR}/${distro_name}/root" 2>/dev/null || true
+    # Unmount custom file-system bindings
+    if [ -n "$custom_fs_bindings" ]; then
+        for binding in $custom_fs_bindings; do
+            # Derive target inside rootfs
+            case "$binding" in
+            *:*)
+                dst="${binding#*:}"
+                ;;
+            *)
+                dst="$binding"
+                ;;
+            esac
+            busybox umount "${rootfs}${dst}" 2>/dev/null || true
+        done
+    fi
+
+    # Unmount Termux home if used
+    if [ "$use_termux_home" = "true" ]; then
+        if [ "$login_user" = "root" ]; then
+            TERMUX_HOME_BIND="/root"
+        else
+            # fall back to /home/$login_user if login_home not set
+            TERMUX_HOME_BIND="${login_home:-/home/$login_user}"
+        fi
+        busybox umount "${rootfs}${TERMUX_HOME_BIND}" 2>/dev/null || true
+    fi
+
+    # Unmount Android storage directories
+    #    /storage/* first, then /sdcard
+    for storage_dir in /storage/*; do
+        [ -d "$storage_dir" ] || continue
+        busybox umount "${rootfs}${storage_dir}" 2>/dev/null || true
+    done
+    busybox umount "${rootfs}/sdcard" 2>/dev/null || true
+    # Unmount in reverse order
+    busybox umount "${rootfs}/dev/stderr" 2>/dev/null || true
+    busybox umount "${rootfs}/dev/stdout" 2>/dev/null || true
+    busybox umount "${rootfs}/dev/stdin" 2>/dev/null || true
+    busybox umount "${rootfs}/dev/fd" 2>/dev/null || true
+    busybox umount "${rootfs}/dev/random" 2>/dev/null || true
+    busybox umount "${rootfs}/sys" 2>/dev/null || true
+    busybox umount "${rootfs}/proc" 2>/dev/null || true
+    busybox umount "${rootfs}/dev" 2>/dev/null || true
 }
 
 # Function to get distro information
@@ -394,19 +430,6 @@ chroot_distro_warn_if_unsupported_busybox() {
         msg "The installed BusyBox version ($current_version) is outdated and may cause compatibility issues."
         msg "Upgrade to BusyBox v1.36.1 or newer for optimal performance."
     fi
-}
-
-command_login_help() {
-    echo "Usage: ${PROGRAM_NAME} login [OPTIONS] DISTRIBUTION"
-    echo ""
-    echo "Options:"
-    echo "  --user USERNAME        Login as specified user"
-    echo "  --work-dir PATH        Set working directory"
-    echo "  --shared-tmp           Share host tmp directory"
-    echo "  --termux-home          Mount Termux home directory"
-    echo "  --bind PATH[:TARGET]   Bind mount additional paths"
-    echo "  --env VAR=VALUE        Set environment variable"
-    echo "  --help                 Show this help"
 }
 
 #############################################################################
@@ -737,6 +760,18 @@ command_login() {
     command_unmount_system_points
 }
 
+command_login_help() {
+    echo "Usage: ${PROGRAM_NAME} login [OPTIONS] DISTRIBUTION"
+    echo ""
+    echo "Options:"
+    echo "  --user USERNAME        Login as specified user"
+    echo "  --work-dir PATH        Set working directory"
+    echo "  --shared-tmp           Share host tmp directory"
+    echo "  --termux-home          Mount Termux home directory"
+    echo "  --bind PATH[:TARGET]   Bind mount additional paths"
+    echo "  --env VAR=VALUE        Set environment variable"
+    echo "  --help                 Show this help"
+}
 #############################################################################
 #
 # FUNCTION TO LIST THE SUPPORTED DISTRIBUTIONS
