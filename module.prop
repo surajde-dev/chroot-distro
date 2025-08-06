@@ -4,4 +4,4 @@ version=1.0-beta
 versionCode=10
 author=@sabamdarif
 description=Install Gnu/Linux distributions on Android (for sabamdarif/termux-desktop)
-updateJson=https://raw.githubusercontent.com/Magisk-Modules-Alt-Repo/chroot-distro/main/update.json
+updateJson=https://raw.githubusercontent.com/sabamdarif/chroot-distro/main/update.json

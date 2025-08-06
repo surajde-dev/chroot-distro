@@ -432,6 +432,10 @@ chroot_distro_warn_if_unsupported_busybox() {
     fi
 }
 
+command_install_help() {
+    msg "Will add that in future"
+}
+
 #############################################################################
 #
 # FUNCTION TO START SHELL OR EXECUTE COMMAND
@@ -1062,6 +1066,11 @@ command_remove_help() {
 show_version() {
     msg "${CYAN}Chroot-Distro v${PROGRAM_VERSION} by @sabamdarif.${RST}"
 }
+
+command_help() {
+    msg "Will add that in future"
+}
+
 chroot_distro_warn_if_unsupported_busybox
 if [ $# -ge 1 ]; then
     case "$1" in

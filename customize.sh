@@ -1,11 +1,6 @@
-# MODPATH="${MODPATH:-${0%/*}}"
 ##########################################################################################
 # Config Flags
 ##########################################################################################
-
-# =1 mean take full control over installation
-SKIPUNZIP=0
-
 # Set to true if you do *NOT* want Magisk to mount
 # any files for you. Most modules would NOT want
 # to set this flag to true
@@ -20,28 +15,25 @@ POSTFSDATA=false
 # Set to true if you need late_start service script
 LATESTARTSERVICE=false
 
-print_modname() {
-    ui_print "*******************************"
-    ui_print "               chroot-distro                "
-    ui_print "*******************************"
-}
+# BusyBox version check - MUST be before any other operations
+ui_print "- Checking BusyBox compatibility..."
 
-check_busybox() {
-    if ! command -v busybox >/dev/null 2>&1; then
-        echo "- BusyBox is not installed. Please install BusyBox v1.36.1 or newer."
-        exit 1
-    fi
+if ! command -v busybox >/dev/null 2>&1; then
+    ui_print "! BusyBox is not installed. Please install BusyBox v1.36.1 or newer."
+    abort "! Installation aborted due to missing BusyBox"
+fi
 
-    current_version=$(busybox | sed -n 's/.* v\([0-9.]*\).*/\1/p')
-    numeric_version=$(echo "$current_version" | tr -d '.')
+current_version=$(busybox | sed -n 's/.* v\([0-9.]*\).*/\1/p')
+if [ -z "$current_version" ]; then
+    ui_print "! Unable to determine BusyBox version"
+    abort "! Installation aborted due to BusyBox version detection failure"
+fi
 
-    if [ "$numeric_version" -lt 1361 ]; then
-        echo "- The installed BusyBox version ($current_version) is outdated and may cause compatibility issues."
-        echo "- Upgrade to BusyBox v1.36.1 or newer for optimal performance."
-        exit 1
-    fi
-}
+numeric_version=$(echo "$current_version" | tr -d '.')
+if [ "$numeric_version" -lt 1361 ]; then
+    ui_print "! The installed BusyBox version ($current_version) is outdated and may cause compatibility issues."
+    ui_print "! Upgrade to BusyBox v1.36.1 or newer for optimal performance."
+    abort "! Installation aborted due to outdated BusyBox version"
+fi
 
-set_permissions() {
-    set_perm_recursive $MODPATH 0 0 0755 0644
-}
+ui_print "- BusyBox version $current_version detected - Compatible!"
