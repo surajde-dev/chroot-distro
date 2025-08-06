@@ -426,13 +426,15 @@ command_login() {
     custom_fs_bindings=""
     login_user="root"
     login_wd=""
-    login_env_vars="PATH=${DEFAULT_PATH_ENV}"
+    login_env_vars=""
     distro_name=""
+    exec_command=""
 
     while [ $# -ge 1 ]; do
         case "$1" in
         --)
             shift 1
+            exec_command="$*"
             break
             ;;
         --help)
@@ -517,7 +519,11 @@ command_login() {
                     return 1
                 fi
 
-                login_env_vars+=("$1")
+                if [ -z "$login_env_vars" ]; then
+                    login_env_vars="$1"
+                else
+                    login_env_vars="$login_env_vars $1"
+                fi
             else
                 msg
                 msg "${BRED}Error: option '${YELLOW}--env${BRED}' requires an argument.${RST}"
@@ -602,17 +608,38 @@ command_login() {
         return 1
     fi
 
-    # Handle /etc/environment.
+    # Handle /etc/environment - POSIX sh compatible version
+    env_from_file=""
     if [ -e "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" ]; then
-        #FIX: mapfile isn't available in android toybox / busybox so i have to find a alternative
-        #FIX: need to optiomized it for POSIX sh
-        mapfile -t -O "${#login_env_vars[@]}" login_env_vars < <(
-            grep -P '^[A-Za-z_][A-Za-z0-9_]+=.+' "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment" |
-                sed -E \
-                    -e "s/^([^=]+=)['\"]/\1/g" \
-                    -e "s/['\"]\$//g" \
-                    -e "/^[^=]+\$/d"
-        )
+        # Read environment variables from /etc/environment
+        while IFS= read -r line || [ -n "$line" ]; do
+            # Skip empty lines and comments
+            case "$line" in
+            '' | '#'*) continue ;;
+            esac
+
+            # Check if line matches pattern VAR=value
+            case "$line" in
+            *=*)
+                # Remove quotes from the value if present
+                clean_line=$(echo "$line" | sed -E 's/^([^=]+=)["'"'"']?([^"'"'"']*)["'"'"']?$/\1\2/')
+                if [ -z "$env_from_file" ]; then
+                    env_from_file="$clean_line"
+                else
+                    env_from_file="$env_from_file $clean_line"
+                fi
+                ;;
+            esac
+        done <"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
+    fi
+
+    # Combine environment variables
+    all_env_vars="PATH=${DEFAULT_PATH_ENV}"
+    if [ -n "$env_from_file" ]; then
+        all_env_vars="$all_env_vars $env_from_file"
+    fi
+    if [ -n "$login_env_vars" ]; then
+        all_env_vars="$all_env_vars $login_env_vars"
     fi
 
     # Create necessary directories if they don't exist
@@ -621,7 +648,6 @@ command_login() {
         chmod 1777 "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
     fi
 
-    # FIX: bind ${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp:/dev/shm need to add this
     # Ensure mount points exist
     mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev"
     mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc"
@@ -691,33 +717,24 @@ command_login() {
         done
     fi
 
-    # Build environment arguments properly
-    # FIX: command like -- env DISPLAY=:0 apt update should be working but it's not
-    # Ex:- chroot-distro login --user "USERNAME" "distro_name" --shared-tmp --termux-home -- env DISPLAY=:0 sudo apt update
-    env_args=""
-    for env_var in $login_env_vars; do
-        env_args="$env_args $env_var"
-    done
-
-    # Enter chroot with clean environment
-    if [ "$login_user" != "root" ]; then
-        # For non-root users, we need to use su or similar after chroot
-        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i \
-            "$env_args" \
-            "COLORTERM=${COLORTERM-}" \
+    # Determine what to execute
+    if [ -n "$exec_command" ]; then
+        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i "${all_env_vars}" \
+            TERM=xterm-256color \
             "HOME=${login_home}" \
             "USER=${login_user}" \
-            "PWD=${login_wd}" \
-            /bin/su -l "$login_user" -c "cd '${login_wd}' 2>/dev/null || cd '${login_home}' 2>/dev/null || cd /; exec ${login_shell} -l" "$@"
+            /bin/su -l "$login_user" -c \
+            "cd '${login_wd}' 2>/dev/null && exec $exec_command"
     else
-        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i \
-            "$env_args" \
-            "COLORTERM=${COLORTERM-}" \
+        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i "${all_env_vars}" \
+            TERM=xterm-256color \
             "HOME=${login_home}" \
             "USER=${login_user}" \
-            "PWD=${login_wd}" \
-            /bin/sh -c "cd '${login_wd}' 2>/dev/null || cd '${login_home}' 2>/dev/null || cd /; exec ${login_shell} -l" "$@"
+            /bin/su -l "$login_user" -c \
+            "cd '${login_wd}' 2>/dev/null && exec ${login_shell} -l"
     fi
+
+    command_unmount_system_points
 }
 
 #############################################################################
@@ -844,7 +861,7 @@ command_clear_cache() {
 
 command_clear_cache_help() {
     msg
-    msg "${BYELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}clear-cache${RST}"
+    msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}clear-cache${RST}"
     msg
     msg "${CYAN}Command aliases: ${GREEN}clear${CYAN}, ${GREEN}cl${RST}"
     msg
