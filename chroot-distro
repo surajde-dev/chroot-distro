@@ -1062,7 +1062,7 @@ command_remove_help() {
 show_version() {
     msg "${ICYAN}Proot-Distro v${PROGRAM_VERSION} by @sabamdarif.${RST}"
 }
-
+chroot_distro_warn_if_unsupported_busybox
 if [ $# -ge 1 ]; then
     case "$1" in
     -h | --help | help | hel | he | h)
