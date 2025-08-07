@@ -414,12 +414,23 @@ command_login() {
     login_wd=""
     distro_name=""
     exec_command=""
+    exec_command_count=0
 
     while [ $# -ge 1 ]; do
         case "$1" in
         --)
             shift 1
-            exec_command="$*"
+            # Build exec_command by properly quoting each argument
+            exec_command=""
+            exec_command_count=$#
+            for arg in "$@"; do
+                if [ -z "$exec_command" ]; then
+                    exec_command=$(printf '%s' "$arg" | sed "s/'/'\\\\''/g; s/^/'/; s/$/'/")
+                else
+                    quoted_arg=$(printf '%s' "$arg" | sed "s/'/'\\\\''/g; s/^/'/; s/$/'/")
+                    exec_command="$exec_command $quoted_arg"
+                fi
+            done
             break
             ;;
         --help)
@@ -642,7 +653,7 @@ command_login() {
     fi
 
     # Determine what to execute
-    if [ -n "$exec_command" ]; then
+    if [ "$exec_command_count" -gt 0 ]; then
         chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i $login_env_vars \
             TERM=xterm-256color \
             HOME="$login_home" \
