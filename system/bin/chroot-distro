@@ -610,6 +610,10 @@ command_login() {
         fi
     done
 
+    # Mount /data directory so it can access that
+    # the main goal is that it can access /data/data/com.termux/files
+    safe_mount "/data" "${INSTALLED_ROOTFS_DIR}/${distro_name}/data"
+
     # Use Termux home directory if requested.
     if [ "$use_termux_home" = "true" ]; then
         if [ "$login_user" = "root" ]; then
@@ -1095,6 +1099,7 @@ command_unmount_system_points() {
         [ -d "${rootfs}${storage_dir}" ] && busybox umount "${rootfs}${storage_dir}" 2>/dev/null || true
     done
     busybox umount "${rootfs}/sdcard" 2>/dev/null || true
+    busybox umount "${rootfs}/data" 2>/dev/null || true
 
     # Unmount core system points in reverse order
     busybox umount "${rootfs}/dev/stderr" 2>/dev/null || true
@@ -1105,6 +1110,7 @@ command_unmount_system_points() {
     busybox umount "${rootfs}/sys" 2>/dev/null || true
     busybox umount "${rootfs}/proc" 2>/dev/null || true
     busybox umount "${rootfs}/dev" 2>/dev/null || true
+
 }
 
 command_unmount_system_points_force() {
