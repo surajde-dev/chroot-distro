@@ -545,17 +545,6 @@ command_login() {
         msg "${BRED}Error: no user '${YELLOW}${login_user}${BRED}' defined in /etc/passwd of distribution.${RST}"
         return 1
     fi
-
-    login_uid=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 3)
-    if [ -z "$login_uid" ]; then
-        msg "${BRED}Error: failed to retrieve the id of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
-        return 1
-    fi
-    login_gid=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 4)
-    if [ -z "$login_gid" ]; then
-        msg "${BRED}Error: failed to retrieve the primary group id of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
-        return 1
-    fi
     login_home=$(grep "^${login_user}:" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/passwd" | cut -d ':' -f 6)
     if [ -z "$login_home" ]; then
         msg "${BRED}Error: failed to retrieve the home of user '${YELLOW}${login_user}${BRED}' from /etc/passwd of distribution.${RST}"
@@ -658,9 +647,7 @@ command_login() {
             TERM=xterm-256color \
             HOME="$login_home" \
             USER="$login_user" \
-            PWD="$login_wd" \
-            /bin/su -s "$login_shell" "$login_user" -c \
-            "cd '$login_wd' 2>/dev/null && exec $exec_command"
+            /bin/su "$login_user" -c "$exec_command"
     else
         chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i $login_env_vars \
             TERM=xterm-256color \
