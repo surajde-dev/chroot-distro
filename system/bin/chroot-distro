@@ -58,8 +58,6 @@ msg() {
 #
 # FUNCTION TO DETECT CPU ARCHITECTURE IN GIVEN DISTRIBUTION
 #
-# Check known executable(s) and return CPU architecture.
-#
 #############################################################################
 
 detect_cpu_arch() {
@@ -83,64 +81,6 @@ safe_mount() {
             return 1
         }
     fi
-}
-
-# Cleanup function to unmount everything
-command_unmount_system_points() {
-    distro_name="$1"
-    rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}"
-    if [ -z "$distro_name" ] || [ ! -d "$rootfs" ]; then
-        return 1
-    fi
-
-    # Unmount shared tmp if used
-    if [ "$make_termux_tmp_shared" = "true" ]; then
-        busybox umount "${rootfs}/tmp" 2>/dev/null || true
-    fi
-
-    # Unmount custom file-system bindings
-    if [ -n "$custom_fs_bindings" ]; then
-        for binding in $custom_fs_bindings; do
-            # Derive target inside rootfs
-            case "$binding" in
-            *:*)
-                dst="${binding#*:}"
-                ;;
-            *)
-                dst="$binding"
-                ;;
-            esac
-            busybox umount "${rootfs}${dst}" 2>/dev/null || true
-        done
-    fi
-
-    # Unmount Termux home if used
-    if [ "$use_termux_home" = "true" ]; then
-        if [ "$login_user" = "root" ]; then
-            TERMUX_HOME_BIND="/root"
-        else
-            # fall back to /home/$login_user if login_home not set
-            TERMUX_HOME_BIND="${login_home:-/home/$login_user}"
-        fi
-        busybox umount "${rootfs}${TERMUX_HOME_BIND}" 2>/dev/null || true
-    fi
-
-    # Unmount Android storage directories
-    #    /storage/* first, then /sdcard
-    for storage_dir in /storage/*; do
-        [ -d "$storage_dir" ] || continue
-        busybox umount "${rootfs}${storage_dir}" 2>/dev/null || true
-    done
-    busybox umount "${rootfs}/sdcard" 2>/dev/null || true
-    # Unmount in reverse order
-    busybox umount "${rootfs}/dev/stderr" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/stdout" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/stdin" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/fd" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/random" 2>/dev/null || true
-    busybox umount "${rootfs}/sys" 2>/dev/null || true
-    busybox umount "${rootfs}/proc" 2>/dev/null || true
-    busybox umount "${rootfs}/dev" 2>/dev/null || true
 }
 
 # Function to get distro information
@@ -782,7 +722,7 @@ command_login_help() {
 # FUNCTION TO LIST THE SUPPORTED DISTRIBUTIONS
 #
 # Print the summary of available distributions and their installation
-# status. The information about distributions is read from plug-in files.
+# status.
 #
 #############################################################################
 
@@ -995,8 +935,14 @@ command_remove() {
 
     msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Wiping the rootfs of ${YELLOW}${display_name}${CYAN}...${RST}"
 
+    # Try to unmount the rootfs before removal
+    msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting system points...${RST}"
+    command_unmount_system_points "${distro_name}"
+    command_unmount_system_points_force "${distro_name}"
+
     # Attempt to restore permissions so directory can be removed without issues.
     # Use busybox chmod if available for better compatibility
+    msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Restoring permissions...${RST}"
     if command -v busybox >/dev/null 2>&1; then
         busybox chmod -R u+rwx "${INSTALLED_ROOTFS_DIR}/${distro_name}" >/dev/null 2>&1 || true
     else
@@ -1020,10 +966,8 @@ command_remove() {
         ;;
     esac
 
-    # Try to unmount the rootfs before removal
-    command_unmount_system_points "${distro_name}"
-
     # Remove the rootfs directory
+    msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Removing rootfs directory...${RST}"
     if rm -rf "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}"; then
         msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Finished.${RST}"
     else
@@ -1055,6 +999,193 @@ command_remove_help() {
     msg
 }
 
+command_unmount() {
+    force_unmount=false
+    distro_name=""
+
+    while [ $# -ge 1 ]; do
+        case "$1" in
+        --)
+            shift 1
+            break
+            ;;
+        -h | --help)
+            command_unmount_help
+            return 0
+            ;;
+        --force | -f)
+            force_unmount=true
+            ;;
+        -*)
+            msg
+            msg "${BRED}Error: got unknown option '${YELLOW}${1}${BRED}'.${RST}"
+            command_unmount_help
+            return 1
+            ;;
+        *)
+            if [ -z "$distro_name" ]; then
+                if [ -z "$1" ]; then
+                    msg
+                    msg "${BRED}Error: distribution alias argument should not be empty.${RST}"
+                    command_unmount_help
+                    return 1
+                fi
+                distro_name="$1"
+            else
+                msg
+                msg "${BRED}Error: got excessive positional argument '${YELLOW}${1}${BRED}'. Note that distribution can be specified only once.${RST}"
+                command_unmount_help
+                return 1
+            fi
+            ;;
+        esac
+        shift 1
+    done
+
+    # Check if distribution name is provided
+    if [ -z "$distro_name" ]; then
+        msg
+        msg "${BRED}Error: distribution alias is not specified.${RST}"
+        command_unmount_help
+        return 1
+    fi
+
+    # Check if distribution is supported
+    distro_found=false
+    for supported_distro in $SUPPORTED_DISTRIBUTIONS; do
+        if [ "$supported_distro" = "$distro_name" ]; then
+            distro_found=true
+            break
+        fi
+    done
+
+    if [ "$distro_found" = "false" ]; then
+        msg
+        msg "${BRED}Error: unknown distribution '${YELLOW}${distro_name}${BRED}'.${RST}"
+        msg
+        msg "${CYAN}Run '${GREEN}${PROGRAM_NAME} list${CYAN}' to see available distributions.${RST}"
+        msg
+        return 1
+    fi
+
+    # Check if distribution is installed
+    if [ ! -d "${INSTALLED_ROOTFS_DIR}/${distro_name}" ]; then
+        msg
+        msg "${BRED}Error: distribution '${YELLOW}${distro_name}${BRED}' is not installed.${RST}"
+        msg
+        return 1
+    fi
+
+    # Perform unmounting
+    if [ "$force_unmount" = "true" ]; then
+        msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Force unmounting system points for ${distro_name}...${RST}"
+        command_unmount_system_points_force "$distro_name"
+    else
+        msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting system points for ${distro_name}...${RST}"
+        command_unmount_system_points "$distro_name"
+    fi
+
+    msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting completed.${RST}"
+}
+
+command_unmount_system_points() {
+    distro_name="$1"
+    rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}"
+
+    if [ -z "$distro_name" ] || [ ! -d "$rootfs" ]; then
+        return 1
+    fi
+
+    # Unmount shared tmp if used
+    if [ "$make_termux_tmp_shared" = "true" ]; then
+        busybox umount "${rootfs}/tmp" 2>/dev/null || true
+    fi
+
+    # Unmount custom file-system bindings
+    if [ -n "$custom_fs_bindings" ]; then
+        for binding in $custom_fs_bindings; do
+            case "$binding" in
+            *:*)
+                dst="${binding#*:}"
+                ;;
+            *)
+                dst="$binding"
+                ;;
+            esac
+            busybox umount "${rootfs}${dst}" 2>/dev/null || true
+        done
+    fi
+
+    # Unmount Termux home if used
+    if [ "$use_termux_home" = "true" ]; then
+        if [ "$login_user" = "root" ]; then
+            TERMUX_HOME_BIND="/root"
+        else
+            TERMUX_HOME_BIND="${login_home:-/home/$login_user}"
+        fi
+        busybox umount "${rootfs}${TERMUX_HOME_BIND}" 2>/dev/null || true
+    fi
+
+    # Unmount Android storage directories - improved order
+    for storage_dir in /storage/*; do
+        [ -d "${rootfs}${storage_dir}" ] && busybox umount "${rootfs}${storage_dir}" 2>/dev/null || true
+    done
+    busybox umount "${rootfs}/sdcard" 2>/dev/null || true
+
+    # Unmount core system points in reverse order
+    busybox umount "${rootfs}/dev/stderr" 2>/dev/null || true
+    busybox umount "${rootfs}/dev/stdout" 2>/dev/null || true
+    busybox umount "${rootfs}/dev/stdin" 2>/dev/null || true
+    busybox umount "${rootfs}/dev/fd" 2>/dev/null || true
+    busybox umount "${rootfs}/dev/random" 2>/dev/null || true
+    busybox umount "${rootfs}/sys" 2>/dev/null || true
+    busybox umount "${rootfs}/proc" 2>/dev/null || true
+    busybox umount "${rootfs}/dev" 2>/dev/null || true
+}
+
+command_unmount_system_points_force() {
+    distro_name="$1"
+    rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}"
+
+    if [ -z "$distro_name" ] || [ ! -d "$rootfs" ]; then
+        return 1
+    fi
+
+    # Kill processes using the rootfs
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -k "$rootfs" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Find all mount points under rootfs and unmount in reverse order
+    grep " ${rootfs}" /proc/mounts 2>/dev/null |
+        awk '{print $2}' |
+        sort -r |
+        while IFS= read -r mount_point; do
+            busybox umount "$mount_point" 2>/dev/null ||
+                busybox umount -l "$mount_point" 2>/dev/null || true
+        done
+}
+
+command_unmount_help() {
+    msg
+    msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}unmount ${CYAN}[${GREEN}OPTIONS${CYAN}] [${GREEN}DISTRIBUTION${CYAN}]${RST}"
+    msg
+    msg "${CYAN}Unmount all system points for the specified distribution.${RST}"
+    msg
+    msg "${CYAN}Options:${RST}"
+    msg
+    msg "  ${GREEN}--force, -f          ${CYAN}- Force unmount by killing processes${RST}"
+    msg "  ${GREEN}--help               ${CYAN}- Show this help information${RST}"
+    msg
+    msg "${CYAN}Examples:${RST}"
+    msg "  ${GREEN}${PROGRAM_NAME} unmount ubuntu${RST}"
+    msg "  ${GREEN}${PROGRAM_NAME} unmount --force debian${RST}"
+    msg
+    show_version
+    msg
+}
+
 #############################################################################
 #
 # FUNCTION TO PRINT VERSION STRING
@@ -1073,6 +1204,7 @@ command_help() {
 }
 
 chroot_distro_warn_if_unsupported_busybox
+
 if [ $# -ge 1 ]; then
     case "$1" in
     -h | --help | help | hel | he | h)
@@ -1094,6 +1226,10 @@ if [ $# -ge 1 ]; then
     login | sh)
         shift 1
         command_login "$@"
+        ;;
+    unmount | umount | um)
+        shift 1
+        command_unmount "$@"
         ;;
     remove | rm)
         shift 1
