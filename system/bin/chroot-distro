@@ -589,6 +589,16 @@ command_login() {
     safe_mount "/proc" "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc"
     safe_mount "/sys" "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys"
 
+    # Mount /dev/pts for pseudo-terminals (required for apt and many other programs)
+    # This cannot use safe_mount as it needs to mount devpts filesystem, not bind mount
+    mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts"
+    if ! busybox mount -t devpts devpts "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts" 2>/dev/null; then
+        # Fallback: try with specific options if the simple mount fails
+        busybox mount -t devpts -o "rw,nosuid,noexec,gid=5,mode=620,ptmxmode=000" devpts "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts" 2>/dev/null || {
+            msg "${YELLOW}Warning: failed to mount devpts to ${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts${RST}"
+        }
+    fi
+
     # Bind mount specific files
     safe_mount "/dev/urandom" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/random"
     safe_mount "/proc/self/fd" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/fd"
@@ -1057,16 +1067,13 @@ command_unmount() {
 command_unmount_system_points() {
     distro_name="$1"
     rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}"
-
     if [ -z "$distro_name" ] || [ ! -d "$rootfs" ]; then
         return 1
     fi
-
     # Unmount shared tmp if used
     if [ "$make_termux_tmp_shared" = "true" ]; then
         busybox umount "${rootfs}/tmp" 2>/dev/null || true
     fi
-
     # Unmount custom file-system bindings
     if [ -n "$custom_fs_bindings" ]; then
         for binding in $custom_fs_bindings; do
@@ -1081,7 +1088,6 @@ command_unmount_system_points() {
             busybox umount "${rootfs}${dst}" 2>/dev/null || true
         done
     fi
-
     # Unmount Termux home if used
     if [ "$use_termux_home" = "true" ]; then
         if [ "$login_user" = "root" ]; then
@@ -1091,24 +1097,23 @@ command_unmount_system_points() {
         fi
         busybox umount "${rootfs}${TERMUX_HOME_BIND}" 2>/dev/null || true
     fi
-
     # Unmount Android storage directories - improved order
     for storage_dir in /storage/*; do
         [ -d "${rootfs}${storage_dir}" ] && busybox umount "${rootfs}${storage_dir}" 2>/dev/null || true
     done
     busybox umount "${rootfs}/sdcard" 2>/dev/null || true
     busybox umount "${rootfs}/data" 2>/dev/null || true
-
     # Unmount core system points in reverse order
     busybox umount "${rootfs}/dev/stderr" 2>/dev/null || true
     busybox umount "${rootfs}/dev/stdout" 2>/dev/null || true
     busybox umount "${rootfs}/dev/stdin" 2>/dev/null || true
     busybox umount "${rootfs}/dev/fd" 2>/dev/null || true
     busybox umount "${rootfs}/dev/random" 2>/dev/null || true
+    # Unmount /dev/pts before /dev (important order)
+    busybox umount "${rootfs}/dev/pts" 2>/dev/null || true
     busybox umount "${rootfs}/sys" 2>/dev/null || true
     busybox umount "${rootfs}/proc" 2>/dev/null || true
     busybox umount "${rootfs}/dev" 2>/dev/null || true
-
 }
 
 command_unmount_system_points_force() {
