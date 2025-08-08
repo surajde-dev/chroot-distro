@@ -314,13 +314,13 @@ command_install() {
     for var in ANDROID_ART_ROOT ANDROID_DATA ANDROID_I18N_ROOT ANDROID_ROOT \
         ANDROID_RUNTIME_ROOT ANDROID_TZDATA_ROOT BOOTCLASSPATH COLORTERM \
         DEX2OATBOOTCLASSPATH EXTERNAL_STORAGE; do
-        set +u
-        if [ -n "${!var}" ]; then
-            echo "${var}=${!var}" >>"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
+        # Use eval to get the value of the variable
+        value=$(eval "echo \${${var}:-}")
+        if [ -n "$value" ]; then
+            echo "${var}=${value}" >>"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/environment"
         fi
-        set -u
     done
-    unset var
+    unset var value
     # Don't touch these variables.
     # TERM is being inherited from currect environment. Otherwise it is being
     # set to xterm-256color (Termux app default).
