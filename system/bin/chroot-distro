@@ -573,6 +573,9 @@ command_login() {
     # Combine environment variables
     login_env_vars="PATH=${DEFAULT_PATH_ENV}"
 
+    # Set locale to C to avoid perl warnings about missing locales
+    login_env_vars="$login_env_vars LANG=C LC_ALL=C"
+
     # Create necessary directories if they don't exist
     if [ ! -d "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp" ]; then
         mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
@@ -664,13 +667,13 @@ command_login() {
 
     # Determine what to execute
     if [ "$exec_command_count" -gt 0 ]; then
-        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i $login_env_vars \
+        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i "$login_env_vars" \
             TERM=xterm-256color \
             HOME="$login_home" \
             USER="$login_user" \
             /bin/su "$login_user" -c "$exec_command"
     else
-        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i $login_env_vars \
+        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i "$login_env_vars" \
             TERM=xterm-256color \
             HOME="$login_home" \
             USER="$login_user" \
