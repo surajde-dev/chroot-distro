@@ -1136,11 +1136,8 @@ command_unmount_system_points() {
     if [ -z "$distro_name" ] || [ ! -d "$rootfs" ]; then
         return 1
     fi
-    # Unmount shared tmp if used
-    if [ "$make_termux_tmp_shared" = "true" ]; then
-        busybox umount "${rootfs}/tmp" 2>/dev/null || true
-    fi
-    # Unmount custom file-system bindings
+
+    # Unmount custom file-system bindings first
     if [ -n "$custom_fs_bindings" ]; then
         for binding in $custom_fs_bindings; do
             case "$binding" in
@@ -1154,6 +1151,12 @@ command_unmount_system_points() {
             busybox umount "${rootfs}${dst}" 2>/dev/null || true
         done
     fi
+
+    # Unmount shared tmp if used
+    if [ "$make_termux_tmp_shared" = "true" ]; then
+        busybox umount "${rootfs}/tmp" 2>/dev/null || true
+    fi
+
     # Unmount Termux home if used
     if [ "$use_termux_home" = "true" ]; then
         if [ "$login_user" = "root" ]; then
@@ -1163,20 +1166,27 @@ command_unmount_system_points() {
         fi
         busybox umount "${rootfs}${TERMUX_HOME_BIND}" 2>/dev/null || true
     fi
-    # Unmount Android storage directories - improved order
+
+    # Unmount /data
+    busybox umount "${rootfs}/data" 2>/dev/null || true
+
+    # Unmount Android storage directories
     for storage_dir in /storage/*; do
         [ -d "${rootfs}${storage_dir}" ] && busybox umount "${rootfs}${storage_dir}" 2>/dev/null || true
     done
     busybox umount "${rootfs}/sdcard" 2>/dev/null || true
-    busybox umount "${rootfs}/data" 2>/dev/null || true
-    # Unmount core system points in reverse order
+
+    # Unmount specific device files
     busybox umount "${rootfs}/dev/stderr" 2>/dev/null || true
     busybox umount "${rootfs}/dev/stdout" 2>/dev/null || true
     busybox umount "${rootfs}/dev/stdin" 2>/dev/null || true
     busybox umount "${rootfs}/dev/fd" 2>/dev/null || true
     busybox umount "${rootfs}/dev/random" 2>/dev/null || true
-    # Unmount /dev/pts before /dev (important order)
+
+    # Unmount /dev/pts before /dev
     busybox umount "${rootfs}/dev/pts" 2>/dev/null || true
+
+    # Unmount core filesystem mounts
     busybox umount "${rootfs}/sys" 2>/dev/null || true
     busybox umount "${rootfs}/proc" 2>/dev/null || true
     busybox umount "${rootfs}/dev" 2>/dev/null || true
