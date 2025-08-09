@@ -712,6 +712,11 @@ command_login() {
     # Bind the tmp folder from the host system to the guest system
     if [ "$make_termux_tmp_shared" = "true" ]; then
         safe_mount "${TERMUX_PREFIX}/tmp" "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
+    else
+        # Mount tmpfs for better performance
+        busybox mount -t tmpfs -o "rw,nosuid,nodev,noexec,size=100M,mode=1777" tmpfs "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp" 2>/dev/null || {
+            msg "${YELLOW}Warning: failed to mount tmpfs for /tmp, using regular filesystem${RST}"
+        }
     fi
 
     # Bind custom file systems
