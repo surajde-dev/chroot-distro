@@ -198,6 +198,11 @@ chroot-distro clear-cache
 
 ---
 
+## License
+
+This project is licensed under the [GNU General Public License v3.0](https://choosealicense.com/licenses/gpl-3.0/).
+
+
 ## Acknowledgments
 
 This project builds upon the work of:
@@ -207,9 +212,9 @@ This project builds upon the work of:
 
 ---
 
-## License
+**If you enjoy this project, consider giving it a star!** :star2:
 
-This project is licensed under the [GNU General Public License v3.0](https://choosealicense.com/licenses/gpl-3.0/).
+---
 
 ## Support the Project
 
