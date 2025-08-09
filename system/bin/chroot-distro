@@ -736,12 +736,36 @@ command_login() {
             USER="$login_user" \
             /bin/su "$login_user" -c "$exec_command"
     else
+        # Create a temporary script to handle directory change and shell execution
+        temp_script_path="${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp/login_script_$$"
+        cat >"$temp_script_path" <<EOF
+#!/bin/sh
+cd "$login_wd" 2>/dev/null || cd "$login_home" 2>/dev/null || cd /
+exec "$login_shell"
+EOF
+        chmod +x "$temp_script_path"
+
         chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i "$login_env_vars" \
             TERM=xterm-256color \
             HOME="$login_home" \
             USER="$login_user" \
             PWD="$login_wd" \
-            /bin/su - "$login_user" -s "$login_shell" -c "cd $login_wd && exec $login_shell"
+            /bin/su - "$login_user" -s "/tmp/login_script_$$"
+
+        # Clean up the temporary script
+        rm -f "$temp_script_path" 2>/dev/null
+        # ############### Previously i was doing it like this ##############################################
+        # which was causing some issue whenever i use the --user flag
+        # it shows a error:- bash: cannot set terminal process group (-1): Inappropriate ioctl for device
+        #                    bash: no job control in this shell
+        # ###################################################################################################
+        # chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i "$login_env_vars" \
+        #     TERM=xterm-256color \
+        #     HOME="$login_home" \
+        #     USER="$login_user" \
+        #     PWD="$login_wd" \
+        #     /bin/su - "$login_user" -s "$login_shell" -c "cd $login_wd && exec $login_shell"
+        # #####################################################################################################
     fi
 
     command_unmount_system_points
