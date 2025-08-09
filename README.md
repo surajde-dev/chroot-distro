@@ -31,6 +31,36 @@ Install the [latest BusyBox for Android NDK](https://github.com/osm0sis/android-
 - ❌ **Avoid:** v1.32.1  
 - ℹ️ Outdated versions may cause issues
 
+## ✅ Install
+- Make sure you install all the [Requirements](https://github.com/sabamdarif/chroot-distro/#-requirements)
+- Flash the latest module from [here](https://github.com/sabamdarif/chroot-distro/releases)
+
+### 📎 Tips for Termux user:-
+- open termux and run:-
+```bash
+nano $PREFIX/bin/chroot
+```
+- and paste this:-
+
+```bash
+#!/data/data/com.termux/files/usr/bin/bash
+
+args=""
+for arg in "$@"; do
+    escaped_arg=$(printf '%s' "$arg" | sed "s/'/'\\\\''/g")
+    args="$args '$escaped_arg'"
+done
+
+su -c "/system/bin/chroot-distro $args"
+```
+- then run:-
+
+```bash
+chmod +x $PREFIX/bin/chroot
+```
+
+- **Now you can easily use chroot-distro from termux no need to run su then run chroot-distro from there**
+    
 ---
 
 ## 📦 Supported Distributions
