@@ -70,12 +70,99 @@ detect_cpu_arch() {
     esac
 }
 
+# Function to set right permission
+# if somehow it get changed
+# i added all the filesystem it  might be useful in future
+set_right_permission() {
+    path="$1"
+
+    case "$path" in
+    "/dev")
+        chmod 755 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/dev/pts")
+        chmod 755 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/dev/binderfs")
+        chmod 755 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/dev/shm")
+        chmod 755 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/dev/null")
+        chmod 666 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/dev/zero")
+        chmod 666 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/dev/urandom")
+        chmod 644 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/dev/random")
+        chmod 644 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/proc")
+        chmod 555 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/sys")
+        chmod 555 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/data")
+        chmod 771 "$path" 2>/dev/null || true
+        chown system:system "$path" 2>/dev/null || true
+        ;;
+    "/sdcard")
+        chmod 644 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/storage")
+        chmod 710 "$path" 2>/dev/null || true
+        chown shell:everybody "$path" 2>/dev/null || true
+        ;;
+    "/storage/emulated")
+        chmod 550 "$path" 2>/dev/null || true
+        chown media_rw:media_rw "$path" 2>/dev/null || true
+        ;;
+    "/tmp")
+        chmod 771 "$path" 2>/dev/null || true
+        chown shell:shell "$path" 2>/dev/null || true
+        ;;
+    "/proc/self/fd")
+        chmod 555 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/proc/self/fd/0")
+        chmod 777 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/proc/self/fd/1")
+        chmod 777 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    "/proc/self/fd/2")
+        chmod 777 "$path" 2>/dev/null || true
+        chown root:root "$path" 2>/dev/null || true
+        ;;
+    esac
+}
+
 # Function to safely mount with error handling
 safe_mount() {
     src="$1"
     dst="$2"
     if [ -e "$src" ]; then
         mkdir -p "$dst" 2>/dev/null || true
+        set_right_permission "$src"
         busybox mount --bind "$src" "$dst" 2>/dev/null || {
             msg "${YELLOW}Warning: failed to mount $src to $dst${RST}"
             return 1
@@ -666,26 +753,19 @@ command_login() {
     # Mount core file systems
     safe_mount "/dev" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev"
     safe_mount "/dev/binderfs" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/binderfs"
-    safe_mount "/dev/shm" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/shm"
-
-    # Mount proc and sys filesystems
-    mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc" 2>/dev/null || true
-    busybox mount -t proc proc "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc" 2>/dev/null || {
-        msg "${YELLOW}Warning: failed to mount proc filesystem${RST}"
+    mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/shm" 2>/dev/null || true
+    busybox mount -t tmpfs -o size=256M tmpfs "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/shm" 2>/dev/null || {
+        msg "${YELLOW}Warning: failed to mount dev/shm filesystem${RST}"
     }
-
-    mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys" 2>/dev/null || true
-    busybox mount -t sysfs sysfs "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys" 2>/dev/null || {
-        msg "${YELLOW}Warning: failed to mount sys filesystem${RST}"
-    }
+    # Mount sys filesystems
+    safe_mount "/sys" "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys"
+    # Mount proc filesystems
+    safe_mount "/proc" "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc"
 
     # Mount /dev/pts for pseudo-terminals (required for apt and many other programs)
     mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts" 2>/dev/null || true
     if ! busybox mount -t devpts devpts "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts" 2>/dev/null; then
-        # Fallback: try with specific options if the simple mount fails
-        busybox mount -t devpts -o "rw,nosuid,noexec,gid=5,mode=620,ptmxmode=000" devpts "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts" 2>/dev/null || {
-            msg "${YELLOW}Warning: failed to mount devpts to ${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts${RST}"
-        }
+        msg "${YELLOW}Warning: failed to mount devpts to ${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts${RST}"
     fi
 
     # Bind mount specific files
@@ -735,10 +815,7 @@ command_login() {
     if [ "$make_termux_tmp_shared" = "true" ]; then
         safe_mount "${TERMUX_PREFIX}/tmp" "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
     else
-        # Mount tmpfs for better performance
-        busybox mount -t tmpfs -o "rw,nosuid,nodev,noexec,size=100M,mode=1777" tmpfs "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp" 2>/dev/null || {
-            msg "${YELLOW}Warning: failed to mount tmpfs for /tmp, using regular filesystem${RST}"
-        }
+        safe_mount "/tmp" "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp" 2>/dev/null
     fi
 
     # Bind custom file systems
