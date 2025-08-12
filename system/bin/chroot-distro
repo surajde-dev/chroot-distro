@@ -208,7 +208,7 @@ get_distro_info() {
         case "$info_type" in
         "version") echo "42" ;;
         "supported_arch") echo "aarch64" ;;
-        "aarch64_url") echo "https://github.com/termux/proot-distro/releases/download/v4.24.0/fedora-aarch64-pd-v4.24.0.tar.xz" ;;
+        "aarch64_url") echo "https://github.com/termux/proot-distro/releases/download/v4.27.0/fedora-aarch64-pd-v4.27.0.tar.xz" ;;
         "arm_url") echo "" ;; # Not supported
         esac
         ;;
