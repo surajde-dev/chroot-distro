@@ -799,10 +799,18 @@ command_login() {
 
     # Bind mount specific files
     safe_mount "/dev/urandom" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/random"
-    safe_mount "/proc/self/fd" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/fd"
-    safe_mount "/proc/self/fd/0" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stdin"
-    safe_mount "/proc/self/fd/1" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stdout"
-    safe_mount "/proc/self/fd/2" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stderr"
+    if [ -d /proc/self/fd ]; then
+        safe_mount "/proc/self/fd" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/fd"
+    fi
+    if [ -d /proc/self/fd/0 ]; then
+        safe_mount "/proc/self/fd/0" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stdin"
+    fi
+    if [ -d /proc/self/fd/1 ]; then
+        safe_mount "/proc/self/fd/1" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stdout"
+    fi
+    if [ -d /proc/self/fd/2 ]; then
+        safe_mount "/proc/self/fd/2" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stderr"
+    fi
 
     if [ "$distro_name" = "archlinux" ]; then
         mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/var/cache/pacman/pkg"
