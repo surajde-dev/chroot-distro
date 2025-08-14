@@ -835,14 +835,10 @@ command_login() {
         fi
     done
 
-    # Enable SUID on /data if it's mounted as a separate filesystem
-    if busybox mount | grep -q " /data "; then
-        if busybox mount | grep " /data " | grep -q "nosuid"; then
-            busybox mount -o remount,dev,suid /data 2>/dev/null || {
-                msg "${YELLOW}Warning: failed to enable SUID on /data${RST}"
-            }
-        fi
-    fi
+    # Enable SUID on /data
+    busybox mount -o remount,dev,suid /data 2>/dev/null || {
+        msg "${YELLOW}Warning: failed to enable SUID on /data${RST}"
+    }
 
     # Mount /data directory so it can access that
     # the main goal is that it can access /data/data/com.termux/files
