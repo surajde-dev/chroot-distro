@@ -1,5 +1,14 @@
 # Changelog
 
+### v1.3
+- improve: mount /proc/self/fd folders only if they exist
+- fix: remove the if block around suid mount
+- improve: always create a new tmpfs then mount to /tmp
+- fix: --termux-home permission denied issue
+- update: debian to debian 13 (trixie)
+- fix: if you use --termux-home make sure it resore the ownership of Termux Home to termux again
+- improve: rely more on busybox, add an option to check that all required commands are available
+
 ### v1.1.2
 - fix: fix wrong permission for /tmp
 
