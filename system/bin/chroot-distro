@@ -958,7 +958,8 @@ EOF
         # #####################################################################################################
     fi
 
-    command_unmount_system_points
+    # use trap to make sure it run always
+    trap "command_unmount_system_points '$distro_name'; exit 1" EXIT INT TERM QUIT HUP
 }
 
 command_login_help() {
@@ -1374,6 +1375,23 @@ command_unmount_system_points() {
             TERMUX_HOME_BIND="${login_home:-/home/$login_user}"
         fi
         busybox umount "${rootfs}${TERMUX_HOME_BIND}" 2>/dev/null || true
+        # restore Termux Home ownership to Termux
+        ORIGINAL_UID=$(busybox stat -c %u /data/data/com.termux)
+        ORIGINAL_GID=$(busybox stat -c %g /data/data/com.termux)
+        PM_OUTPUT=$(pm list packages -U 2>/dev/null | grep "package:com.termux uid:" 2>/dev/null)
+        # making pm verifaction optional because in some case like for kernelsu
+        # you might need to fix the pm command failed
+        # (https://kernelsu.org/guide/how-to-integrate-for-non-gki.html#failed-to-execute-pm-in-terminal)
+        # issue, otherwise pm command will not work for you
+        if [ -n "$PM_OUTPUT" ]; then
+            PM_UID=$(echo "$PM_OUTPUT" | sed 's/.*uid:\([0-9]*\).*/\1/')
+            if [ "$ORIGINAL_UID" != "$PM_UID" ]; then
+                msg "${YELLOW} Warning: Termux UID mismatch detected.${RST}"
+                msg "${YELLOW} You might faced issue login in Termux${RST}"
+            fi
+        fi
+        chown -R "$ORIGINAL_UID":"$ORIGINAL_GID" $TERMUX_HOME
+        unset ORIGINAL_UID ORIGINAL_GID PM_OUTPUT PM_UID
     fi
 
     # Unmount /data
@@ -1415,7 +1433,7 @@ command_unmount_system_points_force() {
     fi
 
     # Kill processes using the rootfs
-    if command -v fuser >/dev/null 2>&1; then
+    if command -v busybox >/dev/null 2>&1; then
         busybox fuser -k "$rootfs" 2>/dev/null || true
         sleep 1
     fi
