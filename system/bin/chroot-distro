@@ -1061,12 +1061,12 @@ command_list() {
                 status_text="[not installed]"
             fi
 
-            msg "  ${CYAN}* ${distro} ${BLUE}(${distro_version}) ${GREEN}${status_text}${RST}"
+            msg "  ${CYAN}* ${YELLOW}${distro} ${GREEN}(${distro_version}) ${BLUE}${status_text}${RST}"
         fi
     done
 
     msg
-    msg "${CYAN}Install selected one with: ${GREEN}${PROGRAM_NAME} install <alias>${RST}"
+    msg "${CYAN}Install selected one with: ${GREEN}${PROGRAM_NAME} install <name>${RST}"
     msg
 }
 
@@ -1534,25 +1534,31 @@ command_help() {
     msg
     msg "${CYAN}A tool for managing chrooted Linux distributions.${RST}"
     msg
-    msg "${CYAN}Available commands:${RST}"
+    msg "${CYAN}List of the available commands:${RST}"
     msg
-    msg "  ${GREEN}install${CYAN}, ${GREEN}i${CYAN}, ${GREEN}add          ${CYAN}Install a Linux distribution${RST}"
-    msg "  ${GREEN}login${CYAN}, ${GREEN}sh                ${CYAN}Start shell or run command in distribution${RST}"
-    msg "  ${GREEN}list${CYAN}, ${GREEN}ls                 ${CYAN}Show available and installed distributions${RST}"
-    msg "  ${GREEN}remove${CYAN}, ${GREEN}rm               ${CYAN}Remove an installed distribution${RST}"
-    msg "  ${GREEN}unmount${CYAN}, ${GREEN}umount${CYAN}, ${GREEN}um     ${CYAN}Unmount system points for distribution${RST}"
-    msg "  ${GREEN}clear-cache${CYAN}, ${GREEN}clear${CYAN}, ${GREEN}cl ${CYAN}Clear downloaded tarball cache${RST}"
-    msg "  ${GREEN}help${CYAN}, ${GREEN}--help${CYAN}, ${GREEN}-h        ${CYAN}Show this help information${RST}"
-    msg "  ${GREEN}--version${CYAN}, ${GREEN}-v           ${CYAN}Show version information${RST}"
+    msg "  ${GREEN}help         ${CYAN}- Show this help information.${RST}"
     msg
-    msg "${CYAN}Examples:${RST}"
-    msg "  ${GREEN}${PROGRAM_NAME} install ubuntu${RST}"
-    msg "  ${GREEN}${PROGRAM_NAME} login ubuntu${RST}"
-    msg "  ${GREEN}${PROGRAM_NAME} login ubuntu -- apt update${RST}"
-    msg "  ${GREEN}${PROGRAM_NAME} remove ubuntu${RST}"
+    msg "  ${GREEN}install      ${CYAN}- Install a specified distribution.${RST}"
     msg
-    msg "${CYAN}For detailed help on a specific command, use:${RST}"
-    msg "  ${GREEN}${PROGRAM_NAME} COMMAND --help${RST}"
+    msg "  ${GREEN}list         ${CYAN}- List supported distributions and their${RST}"
+    msg "                 ${CYAN}installation status.${RST}"
+    msg
+    msg "  ${GREEN}login        ${CYAN}- Start login shell for the specified distribution.${RST}"
+    msg
+    msg "  ${GREEN}remove       ${CYAN}- Delete a specified distribution.${RST}"
+    msg "                 ${BRED}WARNING: this command destroys data!${RST}"
+    msg "  ${GREEN}clear-cache  ${CYAN}- Clear cache of downloaded files. ${RST}"
+    msg
+    msg "${CYAN}Each of commands has its own help information. To view it, just${RST}"
+    msg "${CYAN}supply a '${GREEN}--help${CYAN}' argument to chosen command.${RST}"
+    msg
+    msg "${CYAN}Hint: type command '${GREEN}${PROGRAM_NAME} list${CYAN}' to get a list of the${RST}"
+    msg "${CYAN}supported distributions. Pick a distro name and run the next${RST}"
+    msg "${CYAN}command to install it: ${GREEN}${PROGRAM_NAME} install <name>${RST}"
+    msg
+    msg "${CYAN}Runtime data is stored at this location:${RST}"
+    msg
+    msg "${YELLOW}  ${RUNTIME_DIR}${RST}"
     msg
     show_version
     msg
