@@ -78,6 +78,9 @@ detect_cpu_arch() {
 
 # Function to set right permission
 # if somehow it get changed
+# like kali-nethunter chnage the fileystem default permission
+# or somehow you mistakenly chnage the permission, on those
+# type of case it will be useful
 # i added all the filesystem it  might be useful in future
 set_right_permission() {
     path="$1"
@@ -624,36 +627,23 @@ command_install() {
     echo "aid_$(busybox id -un):*:18446:0:99999:7:::" >> \
         "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/shadow"
 
-    # Add Android group mappings using POSIX sh approach
-    group_names=$(busybox id -Gn | tr ' ' '\n')
-    group_ids=$(busybox id -G | tr ' ' '\n')
+    # Add shadow entry for Android user
+    echo "aid_$(busybox id -un):*:18446:0:99999:7:::" >> \
+        "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/shadow"
 
-    # Create temporary files to store the data
-    tmp_names=$(busybox mktemp)
-    tmp_ids=$(busybox mktemp)
-    echo "$group_names" >"$tmp_names"
-    echo "$group_ids" >"$tmp_ids"
-
-    # Read both files line by line
-    exec 3<"$tmp_names"
-    exec 4<"$tmp_ids"
-
-    while read -r group_name <&3 && read -r group_id <&4; do
-        if [ -n "$group_name" ] && [ -n "$group_id" ]; then
-            echo "aid_${group_name}:x:${group_id}:root,aid_$(busybox id -un)" \
-                >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/group"
-            if [ -f "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/gshadow" ]; then
-                echo "aid_${group_name}:*::root,aid_$(busybox id -un)" \
-                    >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/gshadow"
-            fi
-        fi
-    done
-
-    # Close file descriptors and clean up temp files
-    exec 3<&-
-    exec 4<&-
-    rm -f "$tmp_names" "$tmp_ids"
-
+    cat <<-EOF >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/group"
+	aid_inet:x:3003:
+	aid_net_raw:x:3004:
+	aid_graphics:x:1003:
+	aid_input:x:1004:
+	aid_audio:x:1005:
+	aid_video:x:1006:
+	aid_drm:x:1007:
+EOF
+    if chroot "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}" /bin/id _apt >/dev/null 2>&1; then
+        chroot "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}" /sbin/usermod -g 3003 -G 3003,3004 -a _apt 2>/dev/null
+    fi
+    chroot "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}" /sbin/usermod -G 3003 -a root 2>/dev/null
     msg
     msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Installation completed successfully!${RST}"
     msg
@@ -891,27 +881,11 @@ command_login() {
     safe_mount "/sys" "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys"
     # Mount proc filesystems
     safe_mount "/proc" "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc"
-
-    # Mount /dev/pts for pseudo-terminals (required for apt and many other programs)
-    mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts" 2>/dev/null || true
-    if ! busybox mount -t devpts devpts "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts" 2>/dev/null; then
-        msg "${YELLOW}Warning: failed to mount devpts to ${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts${RST}"
-    fi
-
-    # Bind mount specific files
+    safe_mount "/dev/pts" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/pts"
     safe_mount "/dev/urandom" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/random"
-    if [ -d /proc/self/fd ]; then
-        safe_mount "/proc/self/fd" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/fd"
-    fi
-    if [ -d /proc/self/fd/0 ]; then
-        safe_mount "/proc/self/fd/0" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stdin"
-    fi
-    if [ -d /proc/self/fd/1 ]; then
-        safe_mount "/proc/self/fd/1" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stdout"
-    fi
-    if [ -d /proc/self/fd/2 ]; then
-        safe_mount "/proc/self/fd/2" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/stderr"
-    fi
+    safe_mount "/dev/urandom" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/random"
+    safe_mount "/dev/shm" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/shm"
+    safe_mount "/var/tmp" "${INSTALLED_ROOTFS_DIR}/${distro_name}/var/tmp"
 
     if [ "$distro_name" = "archlinux" ]; then
         mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/var/cache/pacman/pkg"
@@ -922,8 +896,8 @@ command_login() {
         # error: could not determine cachedir mount point /var/cache/pacman/pkg/download-N3AGPU
         # error: failed to commit transaction (not enough free disk space)
         if [ -d "/cache" ]; then
-            mkdir -p "/cache/chroot-pacman-cache/${distro_name}"
-            safe_mount "/cache/chroot-pacman-cache/${distro_name}" "${INSTALLED_ROOTFS_DIR}/${distro_name}/var/cache/pacman"
+            mkdir -p "/cache/chroot-pacman-cache/"
+            safe_mount "/cache/chroot-pacman-cache/" "${INSTALLED_ROOTFS_DIR}/${distro_name}/var/cache/pacman"
         fi
     fi
     # Mount Android storage directories
@@ -1012,29 +986,28 @@ command_login() {
     # get it from here :- https://serverfault.com/a/1144764
     ##################################################################################
     if [ "$exec_command_count" -gt 0 ]; then
-        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i "$login_env_vars" \
+        chroot "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}" /usr/bin/env -i "$login_env_vars" \
             TERM=xterm-256color \
             HOME="$login_home" \
             USER="$login_user" \
             PWD="$login_wd" \
-            /bin/su -P - "$login_user" -s "$login_shell" -c "cd $login_wd && exec $exec_command"
+            /bin/su -P - "$login_user" -s "$login_shell" -c "cd '$login_wd' && exec $exec_command"
     else
         # Change ownership of the home directory BEFORE dropping privileges with `su`
-        if [ -d "${INSTALLED_ROOTFS_DIR}/${distro_name}${login_home}" ]; then
-            chown "$login_uid:$login_gid" "${INSTALLED_ROOTFS_DIR}/${distro_name}${login_home}"
+        if [ -d "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}${login_home}" ]; then
+            chown "$login_uid:$login_gid" "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}${login_home}"
         fi
-        chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /usr/bin/env -i "$login_env_vars" \
+        chroot "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}" /usr/bin/env -i "$login_env_vars" \
             TERM=xterm-256color \
             HOME="$login_home" \
             USER="$login_user" \
             PWD="$login_wd" \
-            /bin/su -P - "$login_user" -s "$login_shell" -c "cd $login_wd && exec $login_shell"
+            /bin/su -P - "$login_user" -s "$login_shell" -c "cd '$login_wd' && exec $login_shell"
     fi
-
     # shellcheck disable=SC2086
     # use trap to make sure it run always
-    # although will run anyway but i just want make sure it do
-    trap 'command_unmount_system_points '$distro_name'; exit 1' EXIT INT TERM QUIT HUP
+    # although will run anyway but i just want make sure it d
+    trap 'msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting system points for ${distro_name}...${RST}"; command_unmount_system_points '$distro_name'; msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting completed.${RST}"; exit 1' EXIT INT TERM QUIT HUP
 }
 
 command_login_help() {
@@ -1260,7 +1233,6 @@ command_remove() {
     # Try to unmount the rootfs before removal
     msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting system points...${RST}"
     command_unmount_system_points "${distro_name}"
-    command_unmount_system_points_force "${distro_name}"
 
     # Attempt to restore permissions so directory can be removed without issues.
     # Use busybox chmod if available for better compatibility
@@ -1328,7 +1300,6 @@ command_remove_help() {
 #############################################################################
 
 command_unmount() {
-    force_unmount=false
     distro_name=""
 
     while [ $# -ge 1 ]; do
@@ -1340,9 +1311,6 @@ command_unmount() {
         -h | --help)
             command_unmount_help
             return 0
-            ;;
-        --force | -f)
-            force_unmount=true
             ;;
         -*)
             msg
@@ -1405,24 +1373,18 @@ command_unmount() {
     fi
 
     # Perform unmounting
-    if [ "$force_unmount" = "true" ]; then
-        msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Force unmounting system points for ${distro_name}...${RST}"
-        command_unmount_system_points_force "$distro_name"
-    else
-        msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting system points for ${distro_name}...${RST}"
-        command_unmount_system_points "$distro_name"
-    fi
+    msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting system points for ${distro_name}...${RST}"
+    command_unmount_system_points "$distro_name"
 
     msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Unmounting completed.${RST}"
 }
 
 command_unmount_system_points() {
     distro_name="$1"
-    rootfs="${INSTALLED_ROOTFS_DIR}/${distro_name}"
+    rootfs="${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}"
     if [ -z "$distro_name" ] || [ ! -d "$rootfs" ]; then
         return 1
     fi
-
     # Unmount custom file-system bindings first
     if [ -n "$custom_fs_bindings" ]; then
         for binding in $custom_fs_bindings; do
@@ -1434,13 +1396,28 @@ command_unmount_system_points() {
                 dst="$binding"
                 ;;
             esac
-            busybox umount "${rootfs}${dst}" 2>/dev/null || true
+            busybox umount "${rootfs:?}${dst}" 2>/dev/null || true
         done
     fi
 
-    # Unmount shared tmp if used
+    busybox umount "${rootfs:?}/tmp" 2>/dev/null || true
     if [ "$make_termux_tmp_shared" = "true" ]; then
-        busybox umount "${rootfs}/tmp" 2>/dev/null || true
+        ORIGINAL_UID=$(busybox stat -c %u /data/data/com.termux)
+        ORIGINAL_GID=$(busybox stat -c %g /data/data/com.termux)
+        PM_OUTPUT=$(pm list packages -U 2>/dev/null | grep "package:com.termux uid:" 2>/dev/null)
+        # making pm verifaction optional because in some case like for kernelsu
+        # you might need to fix the pm command failed
+        # (https://kernelsu.org/guide/how-to-integrate-for-non-gki.html#failed-to-execute-pm-in-terminal)
+        # issue, otherwise pm command will not work for you
+        if [ -n "$PM_OUTPUT" ]; then
+            PM_UID=$(echo "$PM_OUTPUT" | sed 's/.*uid:\([0-9]*\).*/\1/')
+            if [ "$ORIGINAL_UID" != "$PM_UID" ]; then
+                msg "${YELLOW} Warning: Termux UID mismatch detected.${RST}"
+                msg "${YELLOW} You might faced issue in Termux X11${RST}"
+            fi
+        fi
+        chown -R "${ORIGINAL_UID:?}":"${ORIGINAL_GID:?}" ${TERMUX_PREFIX:?}/tmp
+        unset ORIGINAL_UID ORIGINAL_GID PM_OUTPUT PM_UID
     fi
 
     # Unmount Termux home if used
@@ -1450,7 +1427,7 @@ command_unmount_system_points() {
         else
             TERMUX_HOME_BIND="${login_home:-/home/$login_user}"
         fi
-        busybox umount "${rootfs}${TERMUX_HOME_BIND}" 2>/dev/null || true
+        busybox umount "${rootfs:?}${TERMUX_HOME_BIND}" 2>/dev/null || true
         # restore Termux Home ownership to Termux
         ORIGINAL_UID=$(busybox stat -c %u /data/data/com.termux)
         ORIGINAL_GID=$(busybox stat -c %g /data/data/com.termux)
@@ -1466,38 +1443,36 @@ command_unmount_system_points() {
                 msg "${YELLOW} You might faced issue login in Termux${RST}"
             fi
         fi
-        chown -R "$ORIGINAL_UID":"$ORIGINAL_GID" $TERMUX_HOME
+        chown -R "${ORIGINAL_UID:?}":"${ORIGINAL_GID:?}" ${TERMUX_HOME:?}
         unset ORIGINAL_UID ORIGINAL_GID PM_OUTPUT PM_UID
     fi
-
     # Unmount /data
-    busybox umount "${rootfs}/data" 2>/dev/null || true
-
+    busybox umount "${rootfs:?}/data" 2>/dev/null || true
     # Unmount Android storage directories
     for storage_dir in /storage/*; do
-        [ -d "${rootfs}${storage_dir}" ] && busybox umount "${rootfs}${storage_dir}" 2>/dev/null || true
+        [ -d "${rootfs:?}${storage_dir}" ] && busybox umount "${rootfs:?}${storage_dir}" 2>/dev/null || true
     done
-    busybox umount "${rootfs}/sdcard" 2>/dev/null || true
-
+    busybox umount "${rootfs:?}/sdcard" 2>/dev/null || true
     # Unmount specific device files
-    busybox umount "${rootfs}/dev/stderr" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/stdout" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/stdin" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/fd" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/random" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/binderfs" 2>/dev/null || true
-    busybox umount "${rootfs}/dev/shm" 2>/dev/null || true
+    busybox umount "${rootfs:?}/dev/stderr" 2>/dev/null || true
+    busybox umount "${rootfs:?}/dev/stdout" 2>/dev/null || true
+    busybox umount "${rootfs:?}/dev/stdin" 2>/dev/null || true
+    busybox umount "${rootfs:?}/dev/random" 2>/dev/null || true
+    busybox umount "${rootfs:?}/dev/binderfs" 2>/dev/null || true
+    busybox umount "${rootfs:?}/dev/shm" 2>/dev/null || true
+    busybox umount "${rootfs:?}/var/tmp" 2>/dev/null || true
     if [ "$distro_name" = "archlinux" ]; then
-        busybox umount "${rootfs}/var/cache/pacman" 2>/dev/null || true
+        busybox umount "${rootfs:?}/var/cache/pacman" 2>/dev/null || true
     fi
-
     # Unmount /dev/pts before /dev
-    busybox umount "${rootfs}/dev/pts" 2>/dev/null || true
-
+    busybox umount "${rootfs:?}/dev/pts" 2>/dev/null || true
     # Unmount core filesystem mounts
-    busybox umount "${rootfs}/sys" 2>/dev/null || true
-    busybox umount "${rootfs}/proc" 2>/dev/null || true
-    busybox umount "${rootfs}/dev" 2>/dev/null || true
+    busybox umount "${rootfs:?}/sys" 2>/dev/null || true
+    busybox umount "${rootfs:?}/proc" 2>/dev/null || true
+    busybox umount "${rootfs:?}/dev" 2>/dev/null || true
+    if grep -q " ${rootfs}" /proc/mounts 2>/dev/null; then
+        command_unmount_system_points_force "$distro_name"
+    fi
 }
 
 command_unmount_system_points_force() {
@@ -1532,7 +1507,6 @@ command_unmount_help() {
     msg
     msg "${CYAN}Options:${RST}"
     msg
-    msg "  ${GREEN}--force, -f          ${CYAN}- Force unmount by killing processes${RST}"
     msg "  ${GREEN}--help               ${CYAN}- Show this help information${RST}"
     msg
     msg "${CYAN}Examples:${RST}"
