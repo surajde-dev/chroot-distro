@@ -244,8 +244,8 @@ get_distro_info() {
     "kali")
         case "$info_type" in
         "supported_arch") echo "aarch64 arm" ;;
-        "aarch64_url") echo "https://github.com/sabamdarif/chroot-distro/releases/download/distro/Kali.Linux-latest-aarch64.tar.xz" ;;
-        "arm_url") echo "https://github.com/sabamdarif/chroot-distro/releases/download/distro/Kali.Linux-latest-arm.tar.xz" ;;
+        "aarch64_url") echo "https://github.com/sabamdarif/chroot-distro/releases/download/distro/kali-latest-aarch64.tar.xz" ;;
+        "arm_url") echo "https://github.com/sabamdarif/chroot-distro/releases/download/distro/kali-latest-arm.tar.xz" ;;
         esac
         ;;
     *)
