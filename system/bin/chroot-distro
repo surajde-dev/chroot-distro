@@ -1599,7 +1599,6 @@ command_unmount_help() {
     msg
     msg "${CYAN}Examples:${RST}"
     msg "  ${GREEN}${PROGRAM_NAME} unmount ubuntu${RST}"
-    msg "  ${GREEN}${PROGRAM_NAME} unmount --force debian${RST}"
     msg
     show_version
     msg
