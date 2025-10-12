@@ -1,5 +1,10 @@
 # Changelog
 
+### v1.4.3
+
+- fix: mount /dev in the install part so fix any cannot create /dev/null error
+- refactor: use more busybox
+
 ### v1.4.2
 
 - fix: correct kali's download urls
