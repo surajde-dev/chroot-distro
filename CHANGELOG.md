@@ -1,5 +1,10 @@
 # Changelog
 
+### v1.4.4
+
+- better handle color variables
+- adddistro: ubuntu-lts
+
 ### v1.4.3
 
 - fix: mount /dev in the install part so fix any cannot create /dev/null error
