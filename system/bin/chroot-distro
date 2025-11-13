@@ -1656,7 +1656,9 @@ command_unmount_system_points() {
     busybox umount "${rootfs:?}/data" 2>/dev/null || true
     # Unmount Android storage directories
     for storage_dir in /storage/*; do
-        [ -d "${rootfs:?}${storage_dir}" ] && busybox umount "${rootfs:?}${storage_dir}" 2>/dev/null || true
+        if [ -d "${rootfs:?}${storage_dir}" ]; then
+            busybox umount "${rootfs:?}${storage_dir}" 2>/dev/null || true
+        fi
     done
     busybox umount "${rootfs:?}/sdcard" 2>/dev/null || true
     # Unmount specific device files
