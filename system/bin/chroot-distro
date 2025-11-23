@@ -253,6 +253,13 @@ get_distro_info() {
         distro_setup() {
             # Configure en_US.UTF-8 locale.
             sed -i -E 's/#[[:space:]]?(en_US.UTF-8[[:space:]]+UTF-8)/\1/g' ./etc/locale.gen
+
+            run_chroot_cmd /bin/sh -c "dpkg-statoverride --remove /usr/lib/dbus-1.0/dbus-daemon-launch-helper 2>/dev/null || true"
+            run_chroot_cmd /bin/sh -c "dpkg-statoverride --remove /var/lib/polkit-1 2>/dev/null || true"
+
+            run_chroot_cmd /bin/sh -c "groupadd -r messagebus 2>/dev/null || true"
+            run_chroot_cmd /bin/sh -c "useradd -r -g messagebus -d /nonexistent -s /usr/sbin/nologin messagebus 2>/dev/null || true"
+
             run_chroot_cmd DEBIAN_FRONTEND=noninteractive dpkg-reconfigure locales
         }
         ;;
@@ -743,6 +750,7 @@ command_install() {
         "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/shadow"
 
     busybox cat <<-EOF >"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/group"
+        root:x:0:
 		aid_inet:x:3003:
         aid_net_raw:x:3004:
         aid_graphics:x:1003:
