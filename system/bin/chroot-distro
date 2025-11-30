@@ -394,6 +394,17 @@ check_if_running_as_root() {
 
 #############################################################################
 #
+# FUNCTION TO REMOVE ANY ENTRY FROM DISTRO'S /etc/profile
+#
+#############################################################################
+
+cleanup_profile() {
+    var="$1"
+    busybox sed -i "/export $var=/d" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/profile" 2>/dev/null
+}
+
+#############################################################################
+#
 # FUNCTION TO RUN COMMAND IN CHROOT ENVIRONMENT
 #
 # Simplified function to execute commands inside chroot
@@ -825,6 +836,33 @@ command_install() {
     # Unmount /dev or any other if any
     busybox umount "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/dev" 2>/dev/null || true
 
+    # Create profile if it doesn't exist
+    touch "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/profile"
+
+    cleanup_profile "ANDROID_DATA"
+    echo "export ANDROID_DATA=\"/data\"" >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/profile"
+
+    cleanup_profile "ANDROID_ROOT"
+    echo "export ANDROID_ROOT=\"/system\"" >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/profile"
+
+    cleanup_profile "ANDROID_ART_ROOT"
+    echo "export ANDROID_ART_ROOT=\"/apex/com.android.art\"" >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/profile"
+
+    cleanup_profile "ANDROID_RUNTIME_ROOT"
+    echo "export ANDROID_RUNTIME_ROOT=\"/apex/com.android.runtime\"" >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/profile"
+
+    cleanup_profile "ANDROID_I18N_ROOT"
+    echo "export ANDROID_I18N_ROOT=\"/apex/com.android.i18n\"" >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/profile"
+
+    cleanup_profile "ANDROID_TZDATA_ROOT"
+    echo "export ANDROID_TZDATA_ROOT=\"/apex/com.android.tzdata\"" >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/profile"
+
+    cleanup_profile "EXTERNAL_STORAGE"
+    echo "export EXTERNAL_STORAGE=\"/sdcard/\"" >>"${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/profile"
+
+    # REMOVE LD_PRELOAD from chroot environment to avoid errors
+    cleanup_profile "LD_PRELOAD"
+
     # Run optional distro-specific hook.
     get_distro_info "$distro_name"
     if type distro_setup >/dev/null 2>&1; then
@@ -1110,6 +1148,27 @@ command_login() {
     safe_mount "/dev/urandom" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev/random"
     safe_mount "/var/tmp" "${INSTALLED_ROOTFS_DIR}/${distro_name}/var/tmp"
 
+    safe_mount "/data/dalvik-cache" "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/dalvik-cache"
+
+    # Mount /apex modules
+    if [ -d "/apex" ]; then
+        (
+            cd /apex || return
+            for apex_module in *; do
+                if [ -d "/apex/$apex_module" ]; then
+                    busybox mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/apex/$apex_module" 2>/dev/null
+
+                    # Check if already mounted
+                    if ! busybox mount | busybox grep -q " on ${INSTALLED_ROOTFS_DIR}/${distro_name}/apex/$apex_module "; then
+                        if ! busybox mount --rbind "/apex/$apex_module" "${INSTALLED_ROOTFS_DIR}/${distro_name}/apex/$apex_module" 2>/dev/null; then
+                            msg "${YELLOW}Warning: failed to mount /apex/$apex_module${RST}"
+                        fi
+                    fi
+                fi
+            done
+        )
+    fi
+
     # Special handling for Arch Linux
     if [ "$distro_name" = "archlinux" ]; then
         mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/var/cache/pacman/pkg"
@@ -1166,6 +1225,11 @@ command_login() {
         safe_mount "${TERMUX_PREFIX}/tmp" "${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp"
         busybox chmod 1777 "${TERMUX_PREFIX}/tmp" 2>/dev/null || {
             msg "${YELLOW}Warning: could not set proper permissions on ${TERMUX_PREFIX}/tmp${RST}"
+        }
+
+        safe_mount "${TERMUX_HOME}" "${INSTALLED_ROOTFS_DIR}/${distro_name}/termux-home"
+        busybox chmod -R 755 "${INSTALLED_ROOTFS_DIR}/${distro_name}/termux-home" || {
+            msg "${YELLOW}Warning: could not set proper permissions on ${TERMUX_HOME}${RST}"
         }
     else
         if ! busybox mount | busybox grep -q " on ${INSTALLED_ROOTFS_DIR}/${distro_name}/tmp "; then
