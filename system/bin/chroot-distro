@@ -786,7 +786,7 @@ command_install() {
     # Setup /run/resolvconf directory and DNS
     chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /bin/mkdir -p /run/resolvconf 2>/dev/null || true
     busybox printf "$dns_servers" >"${INSTALLED_ROOTFS_DIR}/${distro_name}/run/resolvconf/resolv.conf"
-    chroot "${INSTALLED_ROOTFS_DIR}/${distro_name}" /bin/ln -sf /run/resolvconf/resolv.conf /etc/resolv.conf 2>/dev/null || true
+    busybox ln -sf "${INSTALLED_ROOTFS_DIR}/${distro_name}/run/resolvconf/resolv.conf" "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/resolv.conf" 2>/dev/null || true
 
     # Default /etc/hosts may be empty or incomplete.
     msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Creating file '${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/etc/hosts'...${RST}"
