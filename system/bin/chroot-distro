@@ -260,6 +260,13 @@ restore_data_permissions() {
 		fi
 	done <"$perms_file"
 
+	# Strip recursive "other" access from Termux Home if we opened it
+	# This reverts the chmod -R o+rwX we did
+	if [ -d "$TERMUX_HOME" ]; then
+		busybox chmod -R o-rwx "$TERMUX_HOME" 2>/dev/null || true
+		busybox chmod 700 "$TERMUX_HOME" 2>/dev/null || true
+	fi
+
 	# Delete the permissions file
 	busybox rm -f "$perms_file"
 }
@@ -1502,9 +1509,9 @@ command_login() {
 			busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux" 2>/dev/null || true
 			busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data/com.termux/files" 2>/dev/null || true
 
-			# Make the home directory itself accessible to the chroot user
-			# Since the owner (Termux app) is different from chroot user, we open permissions
-			busybox chmod 777 "${INSTALLED_ROOTFS_DIR}/${distro_name}${user_home}" 2>/dev/null || {
+			# Make the home directory itself AND CONTENTS accessible to the chroot user
+			# Recursive change needed so user can access subdirectories
+			busybox chmod -R o+rwX "${INSTALLED_ROOTFS_DIR}/${distro_name}${user_home}" 2>/dev/null || {
 				msg "${YELLOW}Warning: could not make ${user_home} writeable${RST}"
 			}
 		fi
