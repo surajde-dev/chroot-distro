@@ -2008,6 +2008,8 @@ command_unmount() {
 		return 1
 	fi
 
+	rootfs="${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}"
+
 	# Check if distribution is supported
 	distro_found=false
 	for supported_distro in $SUPPORTED_DISTRIBUTIONS; do
@@ -2175,7 +2177,7 @@ command_unmount_system_points_force() {
 
 command_unmount_help() {
 	msg
-	msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}unmount ${CYAN}[${GREEN}OPTIONS${CYAN}] [${GREEN}DISTRIBUTION${CYAN}]${RST}"
+	msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}unmount ${CYAN}[${GREEN}DISTRIBUTION${CYAN}]${RST}"
 	msg
 	msg "${CYAN}Unmount all system points for the specified distribution.${RST}"
 	msg
