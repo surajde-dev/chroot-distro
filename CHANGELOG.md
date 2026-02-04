@@ -1,5 +1,11 @@
 # Changelog
 
+### v1.4.8
+
+- feat: add option to dynamically show distro related data in module description
+- refactor: run normal user network fixes in command_login instead of command_install, move the unmount message to cleanup_all_mounts
+- feat: improve safe_mount to specify fs_type and mount_opts
+
 ### v1.4.7
 
 - feat: refactor the code replace all the termux related path with variables, and fix for --termux-home and --work-dir it wasn't restoring the permission of TERMUX_HOME after exit
