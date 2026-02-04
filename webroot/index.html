@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+		<link rel="stylesheet" href="./src/style.css" />
+		<title>chroot-distro</title>
+	</head>
+
+	<body>
+		<!-- Header -->
+		<header class="header blur-box">
+			<div class="title-container">
+				<h1>chroot-distro</h1>
+				<span id="version-text"></span>
+			</div>
+		</header>
+
+		<!-- Main Content -->
+		<main class="main-content" id="main-content">
+			<!-- Loading state -->
+			<div class="loading-container" id="loading">
+				<div class="spinner"></div>
+				<span>Loading distributions...</span>
+			</div>
+		</main>
+
+		<!-- Maintainer Credit -->
+		<div class="maintainer-credit" id="maintainer-credit"></div>
+
+		<!-- Toast -->
+		<div class="toast-container">
+			<div class="toast" id="toast"></div>
+		</div>
+
+		<script type="module" src="/src/main.js"></script>
+	</body>
+</html>
+
