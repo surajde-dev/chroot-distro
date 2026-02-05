@@ -1,5 +1,19 @@
 # Changelog
 
+### v1.4.9
+
+- feat(chroot-distro): add download_file to first try curl and if doesn't exist then try busybox wget
+- feat(webui): implement a settings page and improve the ui
+- feat(webui): remove the terminalSpinner
+- feat(webui): play a animation when removing a distro
+- feat(webui): add a download animation onn the install button
+- feat(webui): add refresh button
+- fix: remove the check using mount command in list_running as it will not work under webui
+- feat: update workflow to build webui
+- feat: add initial webui support
+- feat: add new list-running option
+- feat: add a option to print the data in a json format
+
 ### v1.4.8
 
 - feat: add option to dynamically show distro related data in module description
