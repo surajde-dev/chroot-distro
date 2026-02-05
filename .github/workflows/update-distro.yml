@@ -11,6 +11,9 @@ env:
   DISTROS: "archlinux debian ubuntu fedora kali"
   # Architectures to skip (space-separated)
   SKIP_ARCHS: "x86_64 i686 i386"
+  # Repository info for download URLs
+  REPO_OWNER: "sabamdarif"
+  REPO_NAME: "chroot-distro"
 
 jobs:
   process-distros:
@@ -21,31 +24,66 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Set up environment
       run: |
         sudo apt-get update
         sudo apt-get install -y wget curl jq xz-utils
 
-    - name: Get existing release assets
-      run: |
-        # Get existing release info and asset URLs
-        echo "Fetching existing release assets..."
-        gh release view distro --json assets > existing_assets.json 2>/dev/null || echo '{"assets": []}' > existing_assets.json
-        cat existing_assets.json
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     - name: Process distributions
       run: |
         set -e
 
+        # Function to extract version from /etc/os-release in archive
+        extract_version() {
+          local archive="$1"
+          local temp_dir=$(mktemp -d)
+          local version="unknown"
+
+          echo "Extracting version from archive..." >&2
+
+          # Try to extract os-release file (extract everything matching *os-release* to handle symlinks)
+          # This ensures we get both the link (etc/os-release) and the target file (usr/lib/os-release)
+          tar -xf "$archive" -C "$temp_dir" --wildcards '*os-release*' 2>/dev/null || true
+
+          # Find os-release
+          local os_release=$(find "$temp_dir" -name "os-release" -type f 2>/dev/null | head -1)
+
+          if [[ -f "$os_release" ]]; then
+            echo "Found os-release: $os_release" >&2
+            cat "$os_release" >&2
+
+            # Try VERSION_ID first (most reliable for version number)
+            version=$(grep -oP '^VERSION_ID="\K[^"]+' "$os_release" 2>/dev/null || \
+                     grep -oP "^VERSION_ID='\K[^']+" "$os_release" 2>/dev/null || \
+                     grep -oP '^VERSION_ID=\K\S+' "$os_release" 2>/dev/null || true)
+
+            # Fall back to VERSION_CODENAME for rolling releases like Debian
+            if [[ -z "$version" || "$version" == "unknown" ]]; then
+              version=$(grep -oP '^VERSION_CODENAME=\K\S+' "$os_release" 2>/dev/null || true)
+            fi
+
+            # Final fallback - use ID_LIKE or just "latest"
+            if [[ -z "$version" ]]; then
+              version="latest"
+            fi
+          fi
+
+          rm -rf "$temp_dir"
+          echo "$version"
+        }
+
         # Function to get SHA256 hash of existing asset
         get_existing_asset_hash() {
-          local asset_name="$1"
+          local tag="$1"
+          local asset_name="$2"
 
-          # Extract digest from the JSON, removing the 'sha256:' prefix
-          local existing_hash=$(jq -r ".assets[] | select(.name == \"$asset_name\") | .digest" existing_assets.json | sed 's/^sha256://')
+          # Get release info for specific tag
+          local release_info=$(gh release view "$tag" --json assets 2>/dev/null || echo '{"assets": []}')
+          local existing_hash=$(echo "$release_info" | jq -r ".assets[] | select(.name == \"$asset_name\") | .digest" | sed 's/^sha256://')
 
           if [[ "$existing_hash" != "null" && -n "$existing_hash" ]]; then
             echo "$existing_hash"
@@ -89,11 +127,22 @@ jobs:
 
         mkdir -p releases
         mkdir -p files_to_upload
-        echo "" > files_changed.txt
+
+        # Initialize distros.json structure
+        echo '{"distros": []}' > distros.json
+
+        # Track which distros were processed for JSON
+        declare -A DISTRO_DATA
 
         # Process distros
         for distro in $DISTROS; do
           echo "=== Processing $distro ==="
+
+          # Initialize per-distro data
+          DISTRO_VERSION=""
+          DISTRO_AARCH64_URL=""
+          DISTRO_ARM_URL=""
+          DISTRO_ARCHS=""
 
         #################################
         #     special case for kali     #
@@ -102,55 +151,69 @@ jobs:
           if [[ "$distro" == "kali" ]]; then
             echo "Processing Kali Linux (special case)"
 
-            # Process aarch64 - Use consistent naming pattern
-            output_file="releases/kali-latest-aarch64.tar.xz"
-            asset_name="kali-latest-aarch64.tar.xz"
+            # Process aarch64
+            temp_output="releases/kali-temp-aarch64.tar.xz"
+            if download_and_process "http://kali.download/nethunter-images/current/rootfs/kali-nethunter-rootfs-minimal-arm64.tar.xz" "$temp_output"; then
+              # Extract version
+              version=$(extract_version "$temp_output")
+              echo "Extracted version: $version"
+              DISTRO_VERSION="$version"
 
-            if download_and_process "http://kali.download/nethunter-images/current/rootfs/kali-nethunter-rootfs-minimal-arm64.tar.xz" "$output_file"; then
-              # Check if file content changed
+              # Final filename with version
+              final_name="kali-${version}-aarch64.tar.xz"
+              output_file="releases/$final_name"
+              mv "$temp_output" "$output_file"
+
+              # Check if content changed
               new_hash=$(sha256sum "$output_file" | cut -d' ' -f1)
-              existing_hash=$(get_existing_asset_hash "$asset_name")
+              existing_hash=$(get_existing_asset_hash "kali" "$final_name")
 
               echo "New hash: $new_hash"
               echo "Existing hash: $existing_hash"
 
               if [[ "$new_hash" != "$existing_hash" ]]; then
-                cp "$output_file" "files_to_upload/"
-                echo "$asset_name" >> files_changed.txt
+                mkdir -p "files_to_upload/${distro}"
+                cp "$output_file" "files_to_upload/${distro}/"
                 echo "✓ Kali aarch64 - Content changed, will upload"
               else
                 echo "✓ Kali aarch64 - No changes, skipping upload"
               fi
-            else
-              echo "✗ Failed to download Kali aarch64"
+
+              DISTRO_AARCH64_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/kali/$final_name"
+              DISTRO_ARCHS="aarch64"
             fi
 
-            # Process arm - Use consistent naming pattern
-            output_file="releases/kali-latest-arm.tar.xz"
-            asset_name="kali-latest-arm.tar.xz"
+            # Process arm
+            temp_output="releases/kali-temp-arm.tar.xz"
+            if download_and_process "http://kali.download/nethunter-images/current/rootfs/kali-nethunter-rootfs-minimal-armhf.tar.xz" "$temp_output"; then
+              version=$(extract_version "$temp_output")
+              if [[ -z "$DISTRO_VERSION" ]]; then
+                DISTRO_VERSION="$version"
+              fi
 
-            if download_and_process "http://kali.download/nethunter-images/current/rootfs/kali-nethunter-rootfs-minimal-armhf.tar.xz" "$output_file"; then
-              # Check if file content changed
+              final_name="kali-${DISTRO_VERSION}-arm.tar.xz"
+              output_file="releases/$final_name"
+              mv "$temp_output" "$output_file"
+
               new_hash=$(sha256sum "$output_file" | cut -d' ' -f1)
-              existing_hash=$(get_existing_asset_hash "$asset_name")
-
-              echo "New hash: $new_hash"
-              echo "Existing hash: $existing_hash"
+              existing_hash=$(get_existing_asset_hash "kali" "$final_name")
 
               if [[ "$new_hash" != "$existing_hash" ]]; then
-                cp "$output_file" "files_to_upload/"
-                echo "$asset_name" >> files_changed.txt
+                mkdir -p "files_to_upload/${distro}"
+                cp "$output_file" "files_to_upload/${distro}/"
                 echo "✓ Kali arm - Content changed, will upload"
               else
                 echo "✓ Kali arm - No changes, skipping upload"
               fi
-            else
-              echo "✗ Failed to download Kali arm"
+
+              DISTRO_ARM_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/kali/$final_name"
+              DISTRO_ARCHS="$DISTRO_ARCHS arm"
             fi
 
+            # Store distro data
+            DISTRO_DATA["$distro"]="${DISTRO_VERSION}|${DISTRO_ARCHS}|${DISTRO_AARCH64_URL}|${DISTRO_ARM_URL}"
             continue
           fi
-
 
 
         #################################
@@ -192,25 +255,50 @@ jobs:
                 continue
               fi
 
-              output_file="releases/${DISTRO_DISPLAY_NAME}-latest-${arch}.tar.xz"
-              asset_name="${DISTRO_DISPLAY_NAME}-latest-${arch}.tar.xz"
-
+              temp_output="releases/${DISTRO_DISPLAY_NAME}-temp-${arch}.tar.xz"
               echo "Found $arch: $url"
 
-              if download_and_process "$url" "$output_file"; then
-                # Check if file content changed
+              if download_and_process "$url" "$temp_output"; then
+                # Extract version
+                version=$(extract_version "$temp_output")
+                echo "Extracted version for $DISTRO_DISPLAY_NAME: $version"
+
+                if [[ -z "$DISTRO_VERSION" ]]; then
+                  DISTRO_VERSION="$version"
+                fi
+
+                # Final filename with version
+                final_name="${DISTRO_DISPLAY_NAME}-${version}-${arch}.tar.xz"
+                output_file="releases/$final_name"
+                mv "$temp_output" "$output_file"
+
+                # Check if content changed
                 new_hash=$(sha256sum "$output_file" | cut -d' ' -f1)
-                existing_hash=$(get_existing_asset_hash "$asset_name")
+                existing_hash=$(get_existing_asset_hash "$DISTRO_DISPLAY_NAME" "$final_name")
 
                 echo "New hash: $new_hash"
                 echo "Existing hash: $existing_hash"
 
                 if [[ "$new_hash" != "$existing_hash" ]]; then
-                  cp "$output_file" "files_to_upload/"
-                  echo "$asset_name" >> files_changed.txt
+                  mkdir -p "files_to_upload/${DISTRO_DISPLAY_NAME}"
+                  cp "$output_file" "files_to_upload/${DISTRO_DISPLAY_NAME}/"
                   echo "✓ Successfully processed $arch for $DISTRO_DISPLAY_NAME - Content changed, will upload"
                 else
                   echo "✓ Successfully processed $arch for $DISTRO_DISPLAY_NAME - No changes, skipping upload"
+                fi
+
+                # Store URLs based on arch
+                download_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${DISTRO_DISPLAY_NAME}/$final_name"
+                if [[ "$arch" == "aarch64" ]]; then
+                  DISTRO_AARCH64_URL="$download_url"
+                elif [[ "$arch" == "arm" ]]; then
+                  DISTRO_ARM_URL="$download_url"
+                fi
+
+                if [[ -z "$DISTRO_ARCHS" ]]; then
+                  DISTRO_ARCHS="$arch"
+                else
+                  DISTRO_ARCHS="$DISTRO_ARCHS $arch"
                 fi
               else
                 echo "✗ Failed to process $arch for $DISTRO_DISPLAY_NAME"
@@ -218,19 +306,62 @@ jobs:
             fi
           done
 
+          # Store distro data
+          DISTRO_DATA["$distro"]="${DISTRO_VERSION}|${DISTRO_ARCHS}|${DISTRO_AARCH64_URL}|${DISTRO_ARM_URL}"
+
           rm -f "${distro}.sh"
           echo ""
         done
 
-        echo "=== Files to Upload ==="
-        if [[ -d "files_to_upload" && $(ls -A files_to_upload/ 2>/dev/null) ]]; then
-          ls -la files_to_upload/
-          echo "Changed files:"
-          cat files_changed.txt
-        else
-          echo "No files need to be uploaded (no changes detected)"
-        fi
+        # Generate distros.json
+        echo "=== Generating distros.json ==="
 
+        json_content='{"distros": ['
+        first=true
+
+        for distro in $DISTROS; do
+          data="${DISTRO_DATA[$distro]}"
+          if [[ -n "$data" ]]; then
+            IFS='|' read -r version archs aarch64_url arm_url <<< "$data"
+
+            # Convert space-separated archs to JSON array
+            arch_json=$(echo "$archs" | tr ' ' '\n' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//')
+
+            if [[ "$first" == "true" ]]; then
+              first=false
+            else
+              json_content="$json_content,"
+            fi
+
+            json_content="$json_content
+          {
+            \"name\": \"$distro\",
+            \"version\": \"$version\",
+            \"supported_arch\": [$arch_json],
+            \"aarch64_url\": \"$aarch64_url\",
+            \"arm_url\": \"$arm_url\"
+          }"
+          fi
+        done
+
+        json_content="$json_content
+        ]}"
+
+        echo "$json_content" | jq '.' > data/distros.json
+        echo "Generated distros.json:"
+        cat data/distros.json
+
+        echo ""
+        echo "=== Files to Upload by Distro ==="
+        for d in files_to_upload/*; do
+          if [[ -d "$d" ]]; then
+            distro_name=$(basename "$d")
+            echo "--- $distro_name ---"
+            ls -la "$d/" 2>/dev/null || echo "No files"
+          fi
+        done
+
+        echo ""
         echo "=== All Processed Files ==="
         if [[ -d "releases" && $(ls -A releases/ 2>/dev/null) ]]; then
           ls -la releases/
@@ -238,49 +369,64 @@ jobs:
           echo "No files were processed successfully"
           exit 1
         fi
-
-    - name: Generate release body
-      run: |
-        cat > release_body.md << EOF
-        ## Linux Distro Rootfs
-
-        Updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
-        This release contains the latest Linux distribution archives from proot-distro or from the official sources
-
-        ### Changes in this update:
-        $(if [[ -s files_changed.txt ]]; then
-          echo "Files updated:"
-          while IFS= read -r file; do
-            echo "- $file"
-          done < files_changed.txt
-        else
-          echo "- No file changes detected in this run"
-        fi)
-        EOF
-
-    - name: Create/Update Release
-      if: hashFiles('files_to_upload/*') != ''
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: distro
-        name: "Linux Distribution Archives"
-        body_path: release_body.md
-        files: files_to_upload/*
-        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Skip release update
-      if: hashFiles('files_to_upload/*') == ''
+    - name: Commit distros.json
       run: |
-        echo "No files changed, skipping release update"
-        cat release_body.md
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+
+        git add data/distros.json
+
+        if git diff --staged --quiet; then
+          echo "No changes to distros.json"
+        else
+          git commit -m "chore: update distros.json with latest versions [skip ci]"
+          git push origin main
+          echo "✅ Committed distros.json"
+        fi
+
+    - name: Create/Update per-distro releases
+      run: |
+        for distro_dir in files_to_upload/*; do
+          if [[ -d "$distro_dir" ]] && [[ -n "$(ls -A "$distro_dir" 2>/dev/null)" ]]; then
+            distro_name=$(basename "$distro_dir")
+            echo "=== Creating/Updating release for $distro_name ==="
+
+            # Generate release body
+            cat > "/tmp/${distro_name}_body.md" <<EOF
+        ## $distro_name Rootfs Archives
+
+        Updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+        These archives are automatically updated from upstream sources.
+
+        ### Files in this release:
+        $(ls -1 "$distro_dir" | sed 's/^/- /')
+        EOF
+
+            # Create or update release
+            if gh release view "$distro_name" &>/dev/null; then
+              echo "Updating existing release: $distro_name"
+              gh release upload "$distro_name" "$distro_dir"/* --clobber
+              gh release edit "$distro_name" --notes-file "/tmp/${distro_name}_body.md"
+            else
+              echo "Creating new release: $distro_name"
+              gh release create "$distro_name" \
+                --title "$distro_name Rootfs" \
+                --notes-file "/tmp/${distro_name}_body.md" \
+                "$distro_dir"/*
+            fi
+
+            echo "✅ Release for $distro_name completed"
+          fi
+        done
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Clean up
       run: |
         rm -rf releases/
         rm -rf files_to_upload/
-        rm -f release_body.md
-        rm -f existing_assets.json
-        rm -f files_changed.txt
+        rm -f distros.json

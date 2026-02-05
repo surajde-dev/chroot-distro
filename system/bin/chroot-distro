@@ -41,8 +41,7 @@ fi
 
 PROGRAM_VERSION="1.4.9"
 
-REPO_WONER="sabamdarif"
-REPO_NAME="chroot-distro"
+REPO_OWNER="sabamdarif"
 
 PROGRAM_NAME=$(basename "$(realpath "$0")")
 
@@ -72,6 +71,12 @@ BUSYBOXPATH="$(command -v busybox 2>/dev/null)"
 
 # variables to store distro information
 SUPPORTED_DISTRIBUTIONS="archlinux debian fedora ubuntu kali"
+
+# JSON distro configuration paths
+DATA_DIR="${RUNTIME_DIR}/data"
+DISTROS_JSON="${DATA_DIR}/distros.json"
+MODDIR_DATA="${MODDIR}/data"
+MODDIR_DISTROS_JSON="${MODDIR_DATA}/distros.json"
 
 # Mount point tracking file - now distro-specific: ${RUNTIME_DIR}/${distro_name}/mount.points
 
@@ -453,6 +458,80 @@ safe_mount() {
 
 #############################################################################
 #
+# AWK-BASED JSON PARSER FOR DISTRO DATA
+#
+# Since we can't rely on jq, use busybox awk to parse the distros.json
+#
+#############################################################################
+
+# Initialize distros data - copy from MODDIR if not present
+init_distros_data() {
+	if [ ! -f "$DISTROS_JSON" ]; then
+		if [ -f "$MODDIR_DISTROS_JSON" ]; then
+			busybox mkdir -p "$DATA_DIR"
+			busybox cp "$MODDIR_DISTROS_JSON" "$DISTROS_JSON"
+		fi
+	fi
+}
+
+# Parse JSON and get distro field
+# Usage: json_get_distro_field "debian" "version"
+json_get_distro_field() {
+	distro_name="$1"
+	field_name="$2"
+
+	[ ! -f "$DISTROS_JSON" ] && return 1
+
+	busybox awk -v distro="$distro_name" -v field="$field_name" '
+    BEGIN { in_distro=0; found=0 }
+    /"name"[[:space:]]*:[[:space:]]*"/ {
+        # Check if we found the distro
+        line=$0
+        gsub(/.*"name"[[:space:]]*:[[:space:]]*"/, "", line)
+        gsub(/".*/, "", line)
+        if (line == distro) { in_distro=1 }
+        else if (in_distro) { in_distro=0 }
+    }
+    in_distro && $0 ~ "\"" field "\"[[:space:]]*:" {
+        line=$0
+        gsub(/.*"/ field "\"[[:space:]]*:[[:space:]]*/, "", line)
+
+        # Check if array
+        if (match(line, /^\[/)) {
+            gsub(/^\[/, "", line)
+            gsub(/\].*/, "", line)
+            gsub(/"/, "", line)
+            gsub(/,/, " ", line)
+            print line
+        } else {
+            # String value
+            gsub(/^"/, "", line)
+            gsub(/".*/, "", line)
+            print line
+        }
+        found=1
+        exit
+    }
+    END { exit !found }
+    ' "$DISTROS_JSON"
+}
+
+# Get list of all distro names from JSON
+json_get_distro_names() {
+	[ ! -f "$DISTROS_JSON" ] && return 1
+
+	busybox awk '
+    /"name"[[:space:]]*:[[:space:]]*"/ {
+        line=$0
+        gsub(/.*"name"[[:space:]]*:[[:space:]]*"/, "", line)
+        gsub(/".*/, "", line)
+        print line
+    }
+    ' "$DISTROS_JSON"
+}
+
+#############################################################################
+#
 # FUNCTION TO GET DISTRO INFORMATION
 #
 #############################################################################
@@ -462,13 +541,26 @@ get_distro_info() {
 	distro_name="$1"
 	info_type="$2" # version, supported_arch, aarch64_url, arm_url
 
+	# Initialize JSON data if needed
+	init_distros_data || return 1
+
+	case "$info_type" in
+	"version")
+		json_get_distro_field "$distro_name" "version"
+		;;
+	"supported_arch")
+		json_get_distro_field "$distro_name" "supported_arch"
+		;;
+	"aarch64_url")
+		json_get_distro_field "$distro_name" "aarch64_url"
+		;;
+	"arm_url")
+		json_get_distro_field "$distro_name" "arm_url"
+		;;
+	esac
+
 	case "$distro_name" in
 	"archlinux")
-		case "$info_type" in
-		"supported_arch") busybox echo "aarch64 arm" ;;
-		"aarch64_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/archlinux-latest-aarch64.tar.xz" ;;
-		"arm_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/archlinux-latest-arm.tar.xz" ;;
-		esac
 		# distro specfic configuration
 		distro_setup() {
 			# Fix environment variables on login or su.
@@ -483,11 +575,6 @@ get_distro_info() {
 		}
 		;;
 	"debian")
-		case "$info_type" in
-		"supported_arch") busybox echo "aarch64 arm" ;;
-		"aarch64_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/debian-latest-aarch64.tar.xz" ;;
-		"arm_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/debian-latest-arm.tar.xz" ;;
-		esac
 		# distro specfic configuration
 		distro_setup() {
 			# Configure en_US.UTF-8 locale.
@@ -496,11 +583,6 @@ get_distro_info() {
 		}
 		;;
 	"fedora")
-		case "$info_type" in
-		"supported_arch") busybox echo "aarch64" ;;
-		"aarch64_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/fedora-latest-aarch64.tar.xz" ;;
-		"arm_url") busybox echo "" ;; # Not supported
-		esac
 		# distro specfic configuration
 		distro_setup() {
 			# Fix environment variables on login or su.
@@ -509,11 +591,6 @@ get_distro_info() {
 		}
 		;;
 	"ubuntu")
-		case "$info_type" in
-		"supported_arch") busybox echo "aarch64 arm" ;;
-		"aarch64_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/ubuntu-latest-aarch64.tar.xz" ;;
-		"arm_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/ubuntu-latest-arm.tar.xz" ;;
-		esac
 		# distro specfic configuration
 		distro_setup() {
 			# Configure en_US.UTF-8 locale.
@@ -530,11 +607,6 @@ get_distro_info() {
 		;;
 
 	"kali")
-		case "$info_type" in
-		"supported_arch") busybox echo "aarch64 arm" ;;
-		"aarch64_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/kali-latest-aarch64.tar.xz" ;;
-		"arm_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/kali-latest-arm.tar.xz" ;;
-		esac
 		# distro specfic configuration
 		distro_setup() {
 			# Configure en_US.UTF-8 locale.
@@ -817,6 +889,12 @@ command_install() {
 		msg "${BRED}Error: distribution alias is not specified.${RST}"
 		command_install_help
 		return 1
+	fi
+
+	# Refresh supported distributions list from JSON if available
+	init_distros_data 2>/dev/null
+	if [ -f "$DISTROS_JSON" ]; then
+		SUPPORTED_DISTRIBUTIONS=$(json_get_distro_names | busybox tr '\n' ' ')
 	fi
 
 	# Check if distribution is supported
@@ -1776,6 +1854,12 @@ command_list() {
 	# Get current CPU architecture
 	current_arch=$(detect_cpu_arch)
 
+	# Refresh supported distributions list from JSON if available
+	init_distros_data 2>/dev/null
+	if [ -f "$DISTROS_JSON" ]; then
+		SUPPORTED_DISTRIBUTIONS=$(json_get_distro_names | busybox tr '\n' ' ')
+	fi
+
 	# JSON output mode
 	if [ "${JOSINIFY}" = "true" ]; then
 		json_output="{\"distributions\":["
@@ -1807,7 +1891,9 @@ command_list() {
 				else
 					json_output="${json_output},"
 				fi
-				json_output="${json_output}{\"name\":\"${distro}\",\"installed\":${installed}}"
+
+				version=$(get_distro_info "$distro" "version")
+				json_output="${json_output}{\"name\":\"${distro}\",\"version\":\"${version}\",\"installed\":${installed}}"
 			fi
 		done
 
@@ -1842,7 +1928,12 @@ command_list() {
 				status_text="[not installed]"
 			fi
 
-			msg "  ${CYAN}* ${YELLOW}${distro} ${BLUE}${status_text}${RST}"
+			version=$(get_distro_info "$distro" "version")
+			if [ -n "$version" ]; then
+				msg "  ${CYAN}* ${YELLOW}${distro} ${GREEN}(${version}) ${BLUE}${status_text}${RST}"
+			else
+				msg "  ${CYAN}* ${YELLOW}${distro} ${BLUE}${status_text}${RST}"
+			fi
 		fi
 	done
 
@@ -2383,7 +2474,7 @@ command_unmount_help() {
 command_help() {
 	# JSON output mode
 	if [ "${JOSINIFY}" = "true" ]; then
-		printf '%s\n' "{\"program\":\"${PROGRAM_NAME}\",\"version\":\"${PROGRAM_VERSION}\",\"maintainer\":\"@${REPO_WONER}\",\"description\":\"A tool for managing chrooted Linux distributions.\",\"usage\":\"${PROGRAM_NAME} COMMAND [OPTIONS] [ARGUMENTS]\",\"commands\":[{\"name\":\"help\",\"description\":\"Show this help information.\"},{\"name\":\"install\",\"description\":\"Install a specified distribution.\"},{\"name\":\"list\",\"description\":\"List supported distributions and their installation status.\"},{\"name\":\"list-running\",\"description\":\"List currently running/mounted distributions.\"},{\"name\":\"login\",\"description\":\"Start login shell for the specified distribution.\"},{\"name\":\"remove\",\"description\":\"Delete a specified distribution.\"},{\"name\":\"clear-cache\",\"description\":\"Clear cache of downloaded files.\"}],\"runtime_dir\":\"${RUNTIME_DIR}\"}"
+		printf '%s\n' "{\"program\":\"${PROGRAM_NAME}\",\"version\":\"${PROGRAM_VERSION}\",\"maintainer\":\"@${REPO_OWNER}\",\"description\":\"A tool for managing chrooted Linux distributions.\",\"usage\":\"${PROGRAM_NAME} COMMAND [OPTIONS] [ARGUMENTS]\",\"commands\":[{\"name\":\"help\",\"description\":\"Show this help information.\"},{\"name\":\"install\",\"description\":\"Install a specified distribution.\"},{\"name\":\"list\",\"description\":\"List supported distributions and their installation status.\"},{\"name\":\"list-running\",\"description\":\"List currently running/mounted distributions.\"},{\"name\":\"login\",\"description\":\"Start login shell for the specified distribution.\"},{\"name\":\"remove\",\"description\":\"Delete a specified distribution.\"},{\"name\":\"clear-cache\",\"description\":\"Clear cache of downloaded files.\"}],\"runtime_dir\":\"${RUNTIME_DIR}\"}"
 		return 0
 	fi
 
@@ -2439,12 +2530,12 @@ command_help() {
 show_version() {
 	# JSON output mode
 	if [ "${JOSINIFY}" = "true" ]; then
-		printf '%s\n' "{\"program\":\"${PROGRAM_NAME}\",\"version\":\"${PROGRAM_VERSION}\",\"maintainer\":\"@${REPO_WONER}\"}"
+		printf '%s\n' "{\"program\":\"${PROGRAM_NAME}\",\"version\":\"${PROGRAM_VERSION}\",\"maintainer\":\"@${REPO_OWNER}\"}"
 		return 0
 	fi
 
 	# Normal human-readable output
-	msg "${CYAN}${PROGRAM_NAME} v${PROGRAM_VERSION} by @${REPO_WONER}.${RST}"
+	msg "${CYAN}${PROGRAM_NAME} v${PROGRAM_VERSION} by @${REPO_OWNER}.${RST}"
 }
 
 #############################################################################

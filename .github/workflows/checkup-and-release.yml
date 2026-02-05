@@ -272,11 +272,15 @@ jobs:
           # Remove webui source folder (build output is in webroot)
           rm -rf webui
 
+          # Ensure data folder exists
+          mkdir -p data
+
           zip -r chroot-distro.zip . \
             -x "README.md" \
             -x "CHANGELOG.md" \
             -x ".git/*" \
             -x ".github/*" \
+            -x ".agent/*" \
             -x ".editorconfig" \
             -x "*.zip"
 
