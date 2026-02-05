@@ -71,7 +71,7 @@ DEFAULT_PATH_ENV="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/
 BUSYBOXPATH="$(command -v busybox 2>/dev/null)"
 
 # variables to store distro information
-SUPPORTED_DISTRIBUTIONS="archlinux debian fedora ubuntu ubuntu-lts kali"
+SUPPORTED_DISTRIBUTIONS="archlinux debian fedora ubuntu kali"
 
 # Mount point tracking file - now distro-specific: ${RUNTIME_DIR}/${distro_name}/mount.points
 
@@ -528,19 +528,7 @@ get_distro_info() {
 			run_chroot_cmd DEBIAN_FRONTEND=noninteractive dpkg-reconfigure locales
 		}
 		;;
-	"ubuntu-lts")
-		case "$info_type" in
-		"supported_arch") busybox echo "aarch64 arm" ;;
-		"aarch64_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/ubuntu-lts-latest-aarch64.tar.xz" ;;
-		"arm_url") busybox echo "https://github.com/${REPO_WONER}/${REPO_NAME}/releases/download/distro/ubuntu-lts-latest-arm.tar.xz" ;;
-		esac
-		# distro specfic configuration
-		distro_setup() {
-			# Configure en_US.UTF-8 locale.
-			sed -i -E 's/#[[:space:]]?(en_US.UTF-8[[:space:]]+UTF-8)/\1/g' ./etc/locale.gen
-			run_chroot_cmd DEBIAN_FRONTEND=noninteractive dpkg-reconfigure locales
-		}
-		;;
+
 	"kali")
 		case "$info_type" in
 		"supported_arch") busybox echo "aarch64 arm" ;;
