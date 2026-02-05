@@ -548,15 +548,6 @@ body {
 	gap: 8px;
 }
 
-.terminal-title .spinner-small {
-	width: 14px;
-	height: 14px;
-	border: 2px solid rgba(233, 69, 96, 0.3);
-	border-top-color: #e94560;
-	border-radius: 50%;
-	animation: spin 1s linear infinite;
-}
-
 .terminal-close-btn {
 	background: transparent;
 	border: none;

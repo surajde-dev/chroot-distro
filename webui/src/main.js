@@ -110,7 +110,6 @@ function createTerminalHTML(distroName) {
         <div class="terminal-container" id="terminal-${distroName}">
             <div class="terminal-header">
                 <div class="terminal-title">
-                    <div class="spinner-small" style="display: none;"></div>
                     <span>Terminal - ${distroName}</span>
                 </div>
                 <button class="terminal-close-btn" title="Close terminal">✕</button>
@@ -351,7 +350,7 @@ async function stopWithTerminal(distroName, btn, card) {
 	const terminal = card.querySelector(`#terminal-${distroName}`);
 	const terminalOutput = terminal.querySelector(".terminal-output");
 	const terminalTitle = terminal.querySelector(".terminal-title span");
-	const terminalSpinner = terminal.querySelector(".spinner-small");
+
 	const closeBtn = terminal.querySelector(".terminal-close-btn");
 
 	// Disable buttons
@@ -364,8 +363,8 @@ async function stopWithTerminal(distroName, btn, card) {
 	closeBtn.disabled = true;
 	terminalOutput.innerHTML = "";
 
-	// Show spinner and stopping message
-	terminalSpinner.style.display = "block";
+	// Show stopping message
+	// terminalSpinner.style.display = "block"; // Removed spinner
 	terminalTitle.textContent = `Stopping ${distroName}...`;
 	terminalTitle.style.color = "";
 
@@ -420,8 +419,6 @@ async function stopWithTerminal(distroName, btn, card) {
 			stopSuccess = exitCode === 0;
 		}
 
-		terminalSpinner.style.display = "none";
-
 		if (stopSuccess) {
 			terminalTitle.textContent = `${distroName} stopped successfully!`;
 			terminalTitle.style.color = "#4ade80";
@@ -448,7 +445,7 @@ async function stopWithTerminal(distroName, btn, card) {
 		}
 	} catch (e) {
 		console.error("Stop error:", e);
-		terminalSpinner.style.display = "none";
+
 		terminalTitle.textContent = "Stop error";
 		terminalTitle.style.color = "#e94560";
 		appendTerminalLine(terminalOutput, `Error: ${e.message}`, "error");
@@ -471,7 +468,7 @@ async function installWithTerminal(distroName, btn, card) {
 	const terminal = card.querySelector(`#terminal-${distroName}`);
 	const terminalOutput = terminal.querySelector(".terminal-output");
 	const terminalTitle = terminal.querySelector(".terminal-title span");
-	const terminalSpinner = terminal.querySelector(".spinner-small");
+
 	const closeBtn = terminal.querySelector(".terminal-close-btn");
 
 	// Disable button and open terminal
@@ -484,7 +481,7 @@ async function installWithTerminal(distroName, btn, card) {
 	terminalOutput.innerHTML = "";
 
 	// Show spinner and installing message
-	terminalSpinner.style.display = "block";
+
 	terminalTitle.textContent = `Installing ${distroName}...`;
 	terminalTitle.style.color = "";
 
@@ -535,7 +532,7 @@ async function installWithTerminal(distroName, btn, card) {
 		}
 
 		// Update terminal UI
-		terminalSpinner.style.display = "none";
+
 		if (btnIcon) btnIcon.classList.remove("download-anim"); // Stop animation
 
 		if (installSuccess) {
@@ -563,7 +560,6 @@ async function installWithTerminal(distroName, btn, card) {
 		}
 	} catch (e) {
 		console.error("Install error:", e);
-		terminalSpinner.style.display = "none";
 		if (btnIcon) btnIcon.classList.remove("download-anim"); // Stop animation
 
 		terminalTitle.textContent = "Installation error";
@@ -586,7 +582,7 @@ async function uninstallWithTerminal(distroName, btn, card) {
 	const terminal = card.querySelector(`#terminal-${distroName}`);
 	const terminalOutput = terminal.querySelector(".terminal-output");
 	const terminalTitle = terminal.querySelector(".terminal-title span");
-	const terminalSpinner = terminal.querySelector(".spinner-small");
+
 	const closeBtn = terminal.querySelector(".terminal-close-btn");
 
 	// Disable buttons
@@ -602,8 +598,7 @@ async function uninstallWithTerminal(distroName, btn, card) {
 	closeBtn.disabled = true;
 	terminalOutput.innerHTML = "";
 
-	// Show spinner and removing message
-	terminalSpinner.style.display = "block";
+	// Show removing message
 	terminalTitle.textContent = `Removing ${distroName}...`;
 	terminalTitle.style.color = "";
 
@@ -649,7 +644,6 @@ async function uninstallWithTerminal(distroName, btn, card) {
 			removeSuccess = distroInfo?.installed === false;
 		}
 
-		terminalSpinner.style.display = "none";
 		if (btnIcon) btnIcon.classList.remove("shake-anim"); // Stop animation
 
 		if (removeSuccess) {
@@ -677,7 +671,6 @@ async function uninstallWithTerminal(distroName, btn, card) {
 		}
 	} catch (e) {
 		console.error("Uninstall error:", e);
-		terminalSpinner.style.display = "none";
 		if (btnIcon) btnIcon.classList.remove("shake-anim"); // Stop animation
 
 		terminalTitle.textContent = "Removal error";
