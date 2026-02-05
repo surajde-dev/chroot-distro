@@ -339,6 +339,26 @@ body {
 	animation: slide-down 1s infinite;
 }
 
+@keyframes shake {
+	0%,
+	100% {
+		transform: rotate(0deg);
+	}
+
+	25% {
+		transform: rotate(-10deg);
+	}
+
+	75% {
+		transform: rotate(10deg);
+	}
+}
+
+.shake-anim {
+	animation: shake 0.5s ease-in-out infinite;
+	transform-origin: center bottom;
+}
+
 /* Error State */
 .error-container {
 	display: flex;
@@ -622,3 +642,4 @@ body {
 		padding: 20px 24px;
 	}
 }
+

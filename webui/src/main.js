@@ -560,7 +560,6 @@ async function installWithTerminal(distroName, btn, card) {
 			showToast("Installation failed", true);
 			closeBtn.disabled = false;
 			btn.disabled = false;
-			// btn.textContent = "Install"; // Removed text reset
 		}
 	} catch (e) {
 		console.error("Install error:", e);
@@ -574,7 +573,6 @@ async function installWithTerminal(distroName, btn, card) {
 		showToast(e.message, true);
 		closeBtn.disabled = false;
 		btn.disabled = false;
-		// btn.textContent = "Install"; // Removed text reset
 	}
 }
 
@@ -593,7 +591,11 @@ async function uninstallWithTerminal(distroName, btn, card) {
 
 	// Disable buttons
 	btn.disabled = true;
-	btn.textContent = "Removing...";
+
+	// Animate icon
+	const btnIcon = btn.querySelector("svg");
+	if (btnIcon) btnIcon.classList.add("shake-anim");
+
 	const startBtn = card.querySelector('[data-action="start"]');
 	if (startBtn) startBtn.disabled = true;
 
@@ -648,6 +650,7 @@ async function uninstallWithTerminal(distroName, btn, card) {
 		}
 
 		terminalSpinner.style.display = "none";
+		if (btnIcon) btnIcon.classList.remove("shake-anim"); // Stop animation
 
 		if (removeSuccess) {
 			terminalTitle.textContent = `${distroName} removed successfully!`;
@@ -670,12 +673,13 @@ async function uninstallWithTerminal(distroName, btn, card) {
 			showToast("Removal failed", true);
 			closeBtn.disabled = false;
 			btn.disabled = false;
-			btn.textContent = "Uninstall";
 			if (startBtn) startBtn.disabled = false;
 		}
 	} catch (e) {
 		console.error("Uninstall error:", e);
 		terminalSpinner.style.display = "none";
+		if (btnIcon) btnIcon.classList.remove("shake-anim"); // Stop animation
+
 		terminalTitle.textContent = "Removal error";
 		terminalTitle.style.color = "#e94560";
 		appendTerminalLine(terminalOutput, `Error: ${e.message}`, "error");
@@ -683,7 +687,6 @@ async function uninstallWithTerminal(distroName, btn, card) {
 		showToast(e.message, true);
 		closeBtn.disabled = false;
 		btn.disabled = false;
-		btn.textContent = "Uninstall";
 		if (startBtn) startBtn.disabled = false;
 	}
 }
