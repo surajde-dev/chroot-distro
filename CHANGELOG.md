@@ -1,5 +1,12 @@
 # Changelog
 
+### v1.5.0
+
+- feat(webui): add search button
+- feat(chroor-distro): improve chroot-distro list loading speed
+- fix(webui): add the missing spin animation
+- feat(chroot-distro/init_distros_data): compare hash before copy
+
 ### v1.4.9
 
 - feat(chroot-distro): add download_file to first try curl and if doesn't exist then try busybox wget
