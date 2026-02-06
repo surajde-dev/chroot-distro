@@ -470,9 +470,23 @@ init_distros_data() {
 	# Ensure data directory exists
 	busybox mkdir -p "$DATA_DIR"
 
-	# Copy distros.json if not present
-	if [ ! -f "$DISTROS_JSON" ]; then
-		if [ -s "$MODDIR_DISTROS_JSON" ]; then
+	# Check if source file exists and is not empty
+	if [ -s "$MODDIR_DISTROS_JSON" ]; then
+		should_update=false
+
+		if [ ! -f "$DISTROS_JSON" ]; then
+			should_update=true
+		else
+			# Compare checksums
+			src_sum=$(busybox sha256sum "$MODDIR_DISTROS_JSON" | busybox cut -d ' ' -f 1)
+			dst_sum=$(busybox sha256sum "$DISTROS_JSON" | busybox cut -d ' ' -f 1)
+
+			if [ "$src_sum" != "$dst_sum" ]; then
+				should_update=true
+			fi
+		fi
+
+		if [ "$should_update" = true ]; then
 			busybox cp "$MODDIR_DISTROS_JSON" "$DISTROS_JSON"
 			if [ ! -s "$DISTROS_JSON" ]; then
 				busybox rm -f "$DISTROS_JSON"
