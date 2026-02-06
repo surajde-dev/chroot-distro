@@ -472,8 +472,11 @@ init_distros_data() {
 
 	# Copy distros.json if not present
 	if [ ! -f "$DISTROS_JSON" ]; then
-		if [ -f "$MODDIR_DISTROS_JSON" ]; then
+		if [ -s "$MODDIR_DISTROS_JSON" ]; then
 			busybox cp "$MODDIR_DISTROS_JSON" "$DISTROS_JSON"
+			if [ ! -s "$DISTROS_JSON" ]; then
+				busybox rm -f "$DISTROS_JSON"
+			fi
 		fi
 	fi
 }
