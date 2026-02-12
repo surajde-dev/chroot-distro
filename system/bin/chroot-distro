@@ -1401,6 +1401,35 @@ command_install_help() {
 #
 #############################################################################
 
+configure_docker_runtime() {
+	distro_name="$1"
+	# Check if dockerd executable exists inside the chroot
+	if [ -x "${INSTALLED_ROOTFS_DIR}/${distro_name}/usr/bin/dockerd" ] || [ -x "${INSTALLED_ROOTFS_DIR}/${distro_name}/usr/sbin/dockerd" ]; then
+		# Configure daemon.json if missing
+		if [ ! -f "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/docker/daemon.json" ]; then
+			mkdir -p "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/docker"
+			cat >"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/docker/daemon.json" <<EOF
+{
+  "storage-driver": "vfs",
+  "iptables": false,
+  "bridge": "none",
+  "group": "aid_inet"
+}
+EOF
+			chmod 644 "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/docker/daemon.json"
+		fi
+
+		# Switch to legacy iptables (fixes kernel incompatibility)
+		if [ -x "${INSTALLED_ROOTFS_DIR}/${distro_name}/usr/sbin/update-alternatives" ] && [ -x "${INSTALLED_ROOTFS_DIR}/${distro_name}/usr/sbin/iptables-legacy" ]; then
+			if readlink "${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/alternatives/iptables" | grep -q "nft"; then
+				run_chroot_cmd update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null 2>&1 || true
+				run_chroot_cmd update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy >/dev/null 2>&1 || true
+			fi
+		fi
+	fi
+}
+
+
 command_login() {
 	use_termux_home=false
 	make_termux_tmp_shared=false
@@ -1617,6 +1646,9 @@ command_login() {
 	fi
 	# If sessions exist, keep the mount tracker file (mounts are shared across sessions)
 
+	# Make the rootfs a mount point so it can be remounted (fixes Docker errors)
+	safe_mount "${INSTALLED_ROOTFS_DIR}/${distro_name}" "${INSTALLED_ROOTFS_DIR}/${distro_name}" "$distro_name" "" "--bind"
+
 	# Mount core file systems
 	safe_mount "/dev" "${INSTALLED_ROOTFS_DIR}/${distro_name}/dev" "$distro_name"
 
@@ -1640,6 +1672,21 @@ command_login() {
 	# Mount sys and proc filesystems
 	safe_mount "/sys" "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys" "$distro_name"
 	safe_mount "/proc" "${INSTALLED_ROOTFS_DIR}/${distro_name}/proc" "$distro_name"
+
+	# Mount cgroup2 filesystem for Docker/container support
+	if [ -d "/sys/fs/cgroup" ]; then
+		if busybox grep -q "cgroup2" /proc/filesystems 2>/dev/null; then
+			safe_mount "" "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys/fs/cgroup" "$distro_name" "cgroup2" "rw,nosuid,nodev,noexec,relatime"
+		else
+			safe_mount "/sys/fs/cgroup" "${INSTALLED_ROOTFS_DIR}/${distro_name}/sys/fs/cgroup" "$distro_name"
+		fi
+	fi
+
+	# Mount tmpfs on /run for Docker and service sockets
+	safe_mount "" "${INSTALLED_ROOTFS_DIR}/${distro_name}/run" "$distro_name" "tmpfs" "rw,nosuid,nodev,mode=755,size=256M"
+
+	# Set mount propagation to rshared for Docker support
+	busybox mount --make-rshared "${INSTALLED_ROOTFS_DIR}/${distro_name}" 2>/dev/null || true
 
 	# Mount binfmt_misc if supported
 	if busybox grep -q binfmt_misc /proc/filesystems 2>/dev/null; then
@@ -1881,6 +1928,11 @@ command_login() {
 	# ################################################################################
 	# get it from here :- https://serverfault.com/a/1144764
 	##################################################################################
+
+	##################################################################################
+
+	# Docker Configuration
+	configure_docker_runtime "$distro_name"
 
 	set -- "$@" /bin/su -P - "$login_user" -s "$login_shell"
 
