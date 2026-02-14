@@ -1,0 +1,264 @@
+name: build distro
+
+on:
+  schedule:
+    # Run every Sunday at 02:00 UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-distro.yml'
+      - 'distro-build/*.sh'
+      - 'bootstrap-rootfs.sh'
+
+env:
+  # Architectures to skip (space-separated, passed to bootstrap-rootfs.sh)
+  SKIP_ARCHS: "x86_64 i686 i386 riscv64"
+  # Repository info for download URLs
+  REPO_OWNER: "sabamdarif"
+  REPO_NAME: "chroot-distro"
+
+jobs:
+  build-distros:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          wget curl jq xz-utils \
+          mmdebstrap \
+          qemu-user-static \
+          binfmt-support \
+          git sudo tar \
+          zstd
+
+        # Enable parallel compression
+        echo "XZ_OPT=-T0" >> $GITHUB_ENV
+
+        # Register binfmt for cross-arch builds
+        sudo update-binfmts --enable
+
+    - name: Build distributions
+      run: |
+        set -e
+
+        # Export SKIP_ARCHS so bootstrap-rootfs.sh can use it
+        export SKIP_ARCHS="${SKIP_ARCHS}"
+        export XZ_OPT="-T0"
+
+        chmod +x bootstrap-rootfs.sh
+        sudo -E ./bootstrap-rootfs.sh
+
+        echo ""
+        echo "=== Built Archives ==="
+        if [ -d "rootfs" ] && [ "$(ls -A rootfs/ 2>/dev/null)" ]; then
+          ls -la rootfs/
+        else
+          echo "No files were built successfully"
+          exit 1
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Process archives and generate distros.json
+      run: |
+        set -e
+
+        # Function to get SHA256 hash of existing asset
+        get_existing_asset_hash() {
+          local tag="$1"
+          local asset_name="$2"
+
+          local release_info=$(gh release view "$tag" --json assets 2>/dev/null || echo '{"assets": []}')
+          local existing_hash=$(echo "$release_info" | jq -r ".assets[] | select(.name == \"$asset_name\") | .digest" | sed 's/^sha256://')
+
+          if [ "$existing_hash" != "null" ] && [ -n "$existing_hash" ]; then
+            echo "$existing_hash"
+          else
+            echo "not_found"
+          fi
+        }
+
+        mkdir -p files_to_upload
+
+        # Track distro data
+        declare -A DISTRO_DATA
+
+        # Process each built archive
+        # Filenames are already DISTRO-ARCH-VERSION.tar.xz from recipe scripts
+        for archive in rootfs/*.tar.xz; do
+          [ -f "$archive" ] || continue
+
+          filename=$(basename "$archive")
+          # Parse filename: DISTRO-ARCH-VERSION.tar.xz
+          # Remove .tar.xz suffix, then split from the right
+          name_part="${filename%.tar.xz}"
+          # Version is the last segment after the last hyphen
+          version="${name_part##*-}"
+          # Remove version to get DISTRO-ARCH
+          distro_arch="${name_part%-*}"
+          # Arch is the last segment of what remains
+          arch="${distro_arch##*-}"
+          # Distro is everything before the arch
+          distro="${distro_arch%-*}"
+
+          echo "=== Processing $filename (distro=$distro, arch=$arch, version=$version) ==="
+
+          # Check if content changed compared to existing release
+          new_hash=$(sha256sum "$archive" | cut -d' ' -f1)
+          existing_hash=$(get_existing_asset_hash "$distro" "$filename")
+
+          echo "  New hash: $new_hash"
+          echo "  Existing hash: $existing_hash"
+
+          if [ "$new_hash" != "$existing_hash" ]; then
+            mkdir -p "files_to_upload/${distro}"
+            cp "$archive" "files_to_upload/${distro}/"
+            echo "  Content changed, will upload"
+          else
+            echo "  No changes, skipping upload"
+          fi
+
+          # Store data for distros.json generation
+          download_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${distro}/${filename}"
+
+          existing_data="${DISTRO_DATA[$distro]:-}"
+          if [ -z "$existing_data" ]; then
+            DISTRO_DATA["$distro"]="${version}|${arch}|"
+          else
+            existing_archs=$(echo "$existing_data" | cut -d'|' -f2)
+            existing_version=$(echo "$existing_data" | cut -d'|' -f1)
+            DISTRO_DATA["$distro"]="${existing_version}|${existing_archs} ${arch}|"
+          fi
+
+          # Store URL by arch
+          if [ "$arch" = "aarch64" ]; then
+            DISTRO_DATA["${distro}_aarch64_url"]="$download_url"
+          elif [ "$arch" = "arm" ]; then
+            DISTRO_DATA["${distro}_arm_url"]="$download_url"
+          fi
+        done
+
+        # Generate distros.json
+        echo "=== Generating distros.json ==="
+
+        json_content='{"distros": ['
+        first=true
+
+        for distro in $(echo "${!DISTRO_DATA[@]}" | tr ' ' '\n' | grep -v '_url$' | sort -u); do
+          data="${DISTRO_DATA[$distro]}"
+          [ -z "$data" ] && continue
+
+          version=$(echo "$data" | cut -d'|' -f1)
+          archs=$(echo "$data" | cut -d'|' -f2)
+
+          aarch64_url="${DISTRO_DATA[${distro}_aarch64_url]:-}"
+          arm_url="${DISTRO_DATA[${distro}_arm_url]:-}"
+
+          # Convert space-separated archs to JSON array
+          arch_json=$(echo "$archs" | tr ' ' '\n' | grep -v '^$' | sed 's/^/"/;s/$/"/' | tr '\n' ',' | sed 's/,$//')
+
+          if [ "$first" = "true" ]; then
+            first=false
+          else
+            json_content="$json_content,"
+          fi
+
+          json_content="$json_content
+          {
+            \"name\": \"$distro\",
+            \"version\": \"$version\",
+            \"supported_arch\": [$arch_json],
+            \"aarch64_url\": \"$aarch64_url\",
+            \"arm_url\": \"$arm_url\"
+          }"
+        done
+
+        json_content="$json_content
+        ]}"
+
+        echo "$json_content" | jq '.' > data/distros.json
+        echo "Generated distros.json:"
+        cat data/distros.json
+
+        echo ""
+        echo "=== Files to Upload by Distro ==="
+        for d in files_to_upload/*; do
+          if [ -d "$d" ]; then
+            distro_name=$(basename "$d")
+            echo "--- $distro_name ---"
+            ls -la "$d/" 2>/dev/null || echo "No files"
+          fi
+        done
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Commit distros.json
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+
+        git add data/distros.json
+
+        if git diff --staged --quiet; then
+          echo "No changes to distros.json"
+        else
+          git commit -m "chore: update distros.json with latest versions [skip ci]"
+          git push origin main
+          echo "Committed distros.json"
+        fi
+
+    - name: Create/Update per-distro releases
+      run: |
+        for distro_dir in files_to_upload/*; do
+          if [ -d "$distro_dir" ] && [ -n "$(ls -A "$distro_dir" 2>/dev/null)" ]; then
+            distro_name=$(basename "$distro_dir")
+            echo "=== Creating/Updating release for $distro_name ==="
+
+            # Generate release body
+            cat > "/tmp/${distro_name}_body.md" <<EOF
+        ## $distro_name Rootfs Archives
+
+        Updated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+        These archives are built from source and automatically updated.
+
+        ### Files in this release:
+        $(ls -1 "$distro_dir" | sed 's/^/- /')
+        EOF
+
+            # Create or update release
+            if gh release view "$distro_name" &>/dev/null; then
+              echo "Updating existing release: $distro_name"
+              gh release upload "$distro_name" "$distro_dir"/* --clobber
+              gh release edit "$distro_name" --notes-file "/tmp/${distro_name}_body.md"
+            else
+              echo "Creating new release: $distro_name"
+              gh release create "$distro_name" \
+                --title "$distro_name Rootfs" \
+                --notes-file "/tmp/${distro_name}_body.md" \
+                "$distro_dir"/*
+            fi
+
+            echo "Release for $distro_name completed"
+          fi
+        done
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Clean up
+      run: |
+        rm -rf rootfs/
+        rm -rf files_to_upload/
+        rm -f distros.json
+        sudo rm -rf /tmp/chroot-distro-bootstrap
