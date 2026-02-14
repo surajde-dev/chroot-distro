@@ -25,6 +25,7 @@ bootstrap_distribution() {
 			mount --bind /dev "${WORKDIR}/void-$(translate_arch "$arch")/dev"
 			mount --bind /proc "${WORKDIR}/void-$(translate_arch "$arch")/proc"
 			mount --bind /sys "${WORKDIR}/void-$(translate_arch "$arch")/sys"
+			rm -f "${WORKDIR}/void-$(translate_arch "$arch")/etc/mtab"
 			chroot "${WORKDIR}/void-$(translate_arch "$arch")" env SSL_NO_VERIFY_PEER=1 xbps-install -Suy xbps
 			chroot "${WORKDIR}/void-$(translate_arch "$arch")" env SSL_NO_VERIFY_PEER=1 xbps-install -uy
 			chroot "${WORKDIR}/void-$(translate_arch "$arch")" env SSL_NO_VERIFY_PEER=1 xbps-install -y base-minimal
