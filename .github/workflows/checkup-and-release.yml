@@ -257,7 +257,7 @@ jobs:
           echo "✅ Updated module.prop:"
           cat module/module.prop
 
-      - name: Commit updated files
+      - name: Amend release commit with updated files
         run: |
           VERSION="${{ steps.extract_version.outputs.version }}"
 
@@ -269,8 +269,8 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update files for release v${VERSION} [skip ci]"
-            echo "✅ Committed updated files"
+            git commit --amend --no-edit
+            echo "✅ Amended release commit with updated files"
           fi
 
       - name: Create and push tag
@@ -290,7 +290,7 @@ jobs:
         run: |
           VERSION="${{ steps.extract_version.outputs.version }}"
 
-          git push origin main
+          git push --force-with-lease origin main
           git push origin "${VERSION}"
 
           echo "✅ Pushed changes and tag"
