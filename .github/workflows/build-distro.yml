@@ -28,7 +28,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.check-changes.outputs.matrix }}
       should_build: ${{ steps.check-changes.outputs.should_build }}
     steps:
       - name: Checkout repository
@@ -90,18 +90,13 @@ jobs:
 
           if [ -n "$clean_distros" ]; then
             # Generate JSON array: ["distro1", "distro2"]
-            # jq -R -s -c 'split(" ") | map(select(length > 0))' reads the entire input string, splits by space, filters empties
-            json_array=$(echo "$clean_distros" | jq -R -s -c 'split(" ") | map(select(length > 0))')
+            # jq -R -c 'split(" ") | map(select(length > 0))' reads the input string, splits by space, filters empties
+            json_array=$(echo "$clean_distros" | tr -d '\n' | jq -R -c 'split(" ") | map(select(length > 0))')
             echo "Matrix JSON: $json_array"
             echo "matrix=$json_array" >> $GITHUB_OUTPUT
           else
             echo "matrix=[]" >> $GITHUB_OUTPUT
           fi
-
-      - name: Set Matrix Output
-        id: set-matrix
-        run: |
-           echo "matrix=${{ steps.check-changes.outputs.matrix }}" >> $GITHUB_OUTPUT
 
   build:
     needs: prepare
