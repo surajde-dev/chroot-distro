@@ -21,7 +21,8 @@ runs:
           qemu-user-static \
           binfmt-support \
           git sudo tar \
-          zstd
+          zstd \
+          debootstrap
 
         # Install missing keyrings for mmdebstrap
         curl -L -o /tmp/mmdebstrap.deb http://ftp.us.debian.org/debian/pool/main/m/mmdebstrap/mmdebstrap_1.5.7-3_all.deb
