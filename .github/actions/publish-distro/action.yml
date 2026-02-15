@@ -52,6 +52,16 @@ runs:
         mkdir -p files_to_upload
         declare -A DISTRO_DATA
 
+        # 1. Load existing data
+        if [ -f "data/distros.json" ]; then
+            echo "Loading existing distros.json..."
+            while IFS=$'\t' read -r name version archs aarch64_url arm_url; do
+                DISTRO_DATA["$name"]="$version|$archs|"
+                [ -n "$aarch64_url" ] && [ "$aarch64_url" != "null" ] && DISTRO_DATA["${name}_aarch64_url"]="$aarch64_url"
+                [ -n "$arm_url" ] && [ "$arm_url" != "null" ] && DISTRO_DATA["${name}_arm_url"]="$arm_url"
+            done < <(jq -r '.distros[] | "\(.name)\t\(.version)\t\(.supported_arch | join(" "))\t\(.aarch64_url)\t\(.arm_url)"' data/distros.json)
+        fi
+
         for archive in rootfs/*.tar.xz; do
           [ -f "$archive" ] || continue
           filename=$(basename "$archive")
@@ -80,12 +90,25 @@ runs:
 
           # Update DISTRO_DATA for distros.json logic
           download_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${distro}/${filename}"
-          if [ -z "${DISTRO_DATA[$distro]}" ]; then
-            DISTRO_DATA["$distro"]="${version}|${arch}|"
+
+          if [ -n "${DISTRO_DATA[$distro]}" ]; then
+             current_data="${DISTRO_DATA[$distro]}"
+             stored_ver=$(echo "$current_data" | cut -d'|' -f1)
+             stored_archs=$(echo "$current_data" | cut -d'|' -f2)
+
+             if [ "$stored_ver" != "$version" ]; then
+                echo "  -> Version change detected ($stored_ver -> $version). Resetting archs."
+                DISTRO_DATA["$distro"]="${version}|${arch}|"
+                unset DISTRO_DATA["${distro}_aarch64_url"]
+                unset DISTRO_DATA["${distro}_arm_url"]
+             else
+                # Check if arch is already in list to avoid duplicates (space delimited)
+                if [[ " $stored_archs " != *" $arch "* ]]; then
+                    DISTRO_DATA["$distro"]="${stored_ver}|${stored_archs} ${arch}|"
+                fi
+             fi
           else
-            prev_ver=$(echo "${DISTRO_DATA[$distro]}" | cut -d'|' -f1)
-            prev_archs=$(echo "${DISTRO_DATA[$distro]}" | cut -d'|' -f2)
-            DISTRO_DATA["$distro"]="${prev_ver}|${prev_archs} ${arch}|"
+             DISTRO_DATA["$distro"]="${version}|${arch}|"
           fi
 
           [ "$arch" = "aarch64" ] && DISTRO_DATA["${distro}_aarch64_url"]="$download_url"
