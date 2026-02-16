@@ -315,8 +315,17 @@ restore_data_permissions() {
 					busybox chmod "$orig_perm" "$path" 2>/dev/null || true
 				fi
 			fi
-		done <"$recursive_file"
-		busybox rm -f "$recursive_file"
+	done <"$recursive_file"
+	fi
+	busybox rm -f "$recursive_file"
+
+	# Restore nosuid and nodev on /data
+	DEVICE_BLOCK="$(busybox grep -w "/data" /proc/mounts | busybox awk '{print $1}' | head -n 1)"
+
+	if [ -n "$DEVICE_BLOCK" ]; then
+		busybox mount -o remount,nosuid,nodev "$DEVICE_BLOCK" /data 2>/dev/null || true
+	else
+		busybox mount -o remount,nosuid,nodev /data 2>/dev/null || true
 	fi
 
 	# Delete the permissions file
