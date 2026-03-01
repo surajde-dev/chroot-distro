@@ -1116,6 +1116,112 @@ async function loadDistros() {
 	}
 }
 
+let cachedAndroidVersion = null;
+
+async function getAndroidVersion() {
+	if (cachedAndroidVersion !== null) return cachedAndroidVersion;
+	try {
+		const { errno, stdout } = await exec("getprop ro.build.version.sdk");
+		if (errno === 0 && stdout) {
+			const sdk = parseInt(stdout.trim(), 10);
+			if (sdk >= 31) {
+				if (sdk === 31) cachedAndroidVersion = 12;
+				else if (sdk === 32) cachedAndroidVersion = 12.1;
+				else if (sdk === 33) cachedAndroidVersion = 13;
+				else if (sdk === 34) cachedAndroidVersion = 14;
+				else cachedAndroidVersion = 15;
+				return cachedAndroidVersion;
+			}
+		}
+	} catch (e) {
+		console.warn("Failed to get Android version:", e);
+	}
+	cachedAndroidVersion = 0;
+	return 0;
+}
+
+async function checkPhantomProcessState() {
+	const ver = await getAndroidVersion();
+	if (ver < 12) return false;
+
+	try {
+		if (ver === 12) {
+			const syncRes = await exec("/system/bin/device_config is_sync_disabled_for_tests");
+			const syncDisabled = syncRes.errno === 0 && syncRes.stdout && syncRes.stdout.trim() === "true";
+
+			const maxRes = await exec("/system/bin/device_config get activity_manager max_phantom_processes");
+			const maxSet = maxRes.errno === 0 && maxRes.stdout && maxRes.stdout.trim() === "2147483647";
+
+			return syncDisabled && maxSet;
+		} else if (ver === 12.1 || ver === 13) {
+			const settingsRes = await exec("settings get global settings_enable_monitor_phantom_procs");
+			return settingsRes.errno === 0 && settingsRes.stdout && settingsRes.stdout.trim() === "false";
+		} else if (ver >= 14) {
+			const propRes = await exec("getprop persist.sys.fflag.override.settings_enable_monitor_phantom_procs");
+			return propRes.errno === 0 && propRes.stdout && propRes.stdout.trim() === "false";
+		} else {
+			return false;
+		}
+	} catch (e) {
+		console.warn("Failed to check phantom process state:", e);
+		return false;
+	}
+}
+
+async function setPhantomProcessKiller(disable) {
+	const ver = await getAndroidVersion();
+	if (ver < 12) return;
+
+	const toggle = document.getElementById("toggle-phantom-process");
+	const card = document.getElementById("setting-phantom-process");
+	if (toggle) toggle.disabled = true;
+	if (card) card.classList.add("disabled");
+
+	try {
+		if (ver === 12) {
+			if (disable) {
+				await exec("/system/bin/device_config set_sync_disabled_for_tests persistent");
+				await exec("/system/bin/device_config put activity_manager max_phantom_processes 2147483647");
+			} else {
+				await exec("/system/bin/device_config set_sync_disabled_for_tests none");
+				await exec("/system/bin/device_config delete activity_manager max_phantom_processes");
+			}
+		} else if (ver === 12.1 || ver === 13) {
+			if (disable) {
+				await exec("settings put global settings_enable_monitor_phantom_procs false");
+			} else {
+				await exec("settings delete global settings_enable_monitor_phantom_procs");
+			}
+		} else if (ver >= 14) {
+			if (disable) {
+				await exec("setprop persist.sys.fflag.override.settings_enable_monitor_phantom_procs false");
+			} else {
+				await exec("setprop persist.sys.fflag.override.settings_enable_monitor_phantom_procs ''");
+			}
+		} else {
+			showToast("Unsupported Android version", true);
+			return;
+		}
+
+		const actualState = await checkPhantomProcessState();
+		if (toggle) toggle.checked = actualState;
+
+		if (actualState === disable) {
+			showToast(disable ? "Phantom process killer disabled" : "Phantom process killer enabled");
+		} else {
+			showToast("Failed to update phantom process killer state", true);
+		}
+	} catch (e) {
+		console.error("Failed to set phantom process killer:", e);
+		showToast("Failed to update phantom process killer", true);
+		const actualState = await checkPhantomProcessState();
+		if (toggle) toggle.checked = actualState;
+	} finally {
+		if (toggle) toggle.disabled = false;
+		if (card) card.classList.remove("disabled");
+	}
+}
+
 /**
  * Load settings from file and update UI
  */
@@ -1148,9 +1254,27 @@ async function loadSettings() {
 		if (toggleServicedVerbose) toggleServicedVerbose.checked = verbose;
 	} catch (e) {
 		console.warn("Failed to load settings:", e);
-		// Default to false if read fails
 		if (toggleServiced) toggleServiced.checked = false;
 		if (toggleServicedVerbose) toggleServicedVerbose.checked = false;
+	}
+
+	const phantomSection = document.getElementById("phantom-process-section");
+	const togglePhantom = document.getElementById("toggle-phantom-process");
+	const phantomDesc = document.getElementById("phantom-process-desc");
+	const ver = await getAndroidVersion();
+
+	if (ver >= 12 && phantomSection) {
+		phantomSection.classList.remove("hidden");
+		if (ver === 12) {
+			if (phantomDesc) phantomDesc.textContent = "Disable sync & set max phantom processes (Android 12)";
+		} else if (ver < 14) {
+			if (phantomDesc) phantomDesc.textContent = "Disable phantom process monitoring (Android " + (ver === 12.1 ? "12L" : "13") + ")";
+		} else {
+			if (phantomDesc) phantomDesc.textContent = "Disable phantom process monitoring (Android " + Math.floor(ver) + "+)";
+		}
+		if (togglePhantom) {
+			togglePhantom.checked = await checkPhantomProcessState();
+		}
 	}
 }
 
@@ -1235,6 +1359,13 @@ async function init() {
 	if (toggleServicedVerbose) {
 		toggleServicedVerbose.addEventListener("change", (e) => {
 			saveSetting("SERVICED_VERBOSE_MODE", e.target.checked);
+		});
+	}
+
+	const togglePhantom = document.getElementById("toggle-phantom-process");
+	if (togglePhantom) {
+		togglePhantom.addEventListener("change", (e) => {
+			setPhantomProcessKiller(e.target.checked);
 		});
 	}
 
