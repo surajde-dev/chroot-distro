@@ -558,6 +558,15 @@ get_distro_info() {
 		distro_setup() {
 			# Configure en_US.UTF-8 locale.
 			sed -i -E 's/#[[:space:]]?(en_US.UTF-8[[:space:]]+UTF-8)/\1/g' ./etc/locale.gen
+			# Disable needrestart interactive prompts and warnings
+			mkdir -p ./etc/needrestart/conf.d
+			cat >./etc/needrestart/conf.d/99-chroot-distro.conf <<-EOF
+				\$nrconf{restart} = 'a';
+				\$nrconf{kernelhints} = 0;
+				\$nrconf{ucodehints} = 0;
+				\$nrconf{interpscan} = 0;
+			EOF
+
 			run_chroot_cmd DEBIAN_FRONTEND=noninteractive dpkg-reconfigure locales
 		}
 		;;
@@ -581,6 +590,15 @@ get_distro_info() {
 			run_chroot_cmd /bin/sh -c "groupadd -r messagebus 2>/dev/null || true"
 			run_chroot_cmd /bin/sh -c "useradd -r -g messagebus -d /nonexistent -s /usr/sbin/nologin messagebus 2>/dev/null || true"
 
+			# Disable needrestart interactive prompts and warnings
+			mkdir -p ./etc/needrestart/conf.d
+			cat >./etc/needrestart/conf.d/99-chroot-distro.conf <<-EOF
+				\$nrconf{restart} = 'a';
+				\$nrconf{kernelhints} = 0;
+				\$nrconf{ucodehints} = 0;
+				\$nrconf{interpscan} = 0;
+			EOF
+
 			run_chroot_cmd DEBIAN_FRONTEND=noninteractive dpkg-reconfigure locales
 		}
 		;;
@@ -590,6 +608,15 @@ get_distro_info() {
 		distro_setup() {
 			# Configure en_US.UTF-8 locale.
 			sed -i -E 's/#[[:space:]]?(en_US.UTF-8[[:space:]]+UTF-8)/\1/g' ./etc/locale.gen
+			# Disable needrestart interactive prompts and warnings
+			mkdir -p ./etc/needrestart/conf.d
+			cat >./etc/needrestart/conf.d/99-chroot-distro.conf <<-EOF
+				\$nrconf{restart} = 'a';
+				\$nrconf{kernelhints} = 0;
+				\$nrconf{ucodehints} = 0;
+				\$nrconf{interpscan} = 0;
+			EOF
+
 			run_chroot_cmd DEBIAN_FRONTEND=noninteractive dpkg-reconfigure locales
 		}
 		;;
@@ -627,6 +654,15 @@ get_distro_info() {
 		distro_setup() {
 			# Configure en_US.UTF-8 locale.
 			sed -i -E 's/#[[:space:]]?(en_US.UTF-8[[:space:]]+UTF-8)/\1/g' ./etc/locale.gen
+			# Disable needrestart interactive prompts and warnings
+			mkdir -p ./etc/needrestart/conf.d
+			cat >./etc/needrestart/conf.d/99-chroot-distro.conf <<-EOF
+				\$nrconf{restart} = 'a';
+				\$nrconf{kernelhints} = 0;
+				\$nrconf{ucodehints} = 0;
+				\$nrconf{interpscan} = 0;
+			EOF
+
 			run_chroot_cmd DEBIAN_FRONTEND=noninteractive dpkg-reconfigure locales
 		}
 		;;
@@ -1948,14 +1984,14 @@ command_login() {
 
 	if [ -n "$DEVICE_BLOCK" ]; then
 		# Remount with dev and suid options
-		busybox mount -o remount,dev,suid,exec "$DEVICE_BLOCK" /data 2>/dev/null || \
-		busybox mount -o remount,suid "$DEVICE_BLOCK" /data 2>/dev/null || {
+		busybox mount -o remount,dev,suid,exec "$DEVICE_BLOCK" /data 2>/dev/null ||
+			busybox mount -o remount,suid "$DEVICE_BLOCK" /data 2>/dev/null || {
 			msg "${YELLOW}Warning: failed to enable SUID/exec on /data (remount failed)${RST}"
 		}
 	else
 		# Fallback: try remounting /data without specifying device (some Android versions might allow this)
-		busybox mount -o remount,dev,suid,exec /data 2>/dev/null || \
-		busybox mount -o remount,suid /data 2>/dev/null || {
+		busybox mount -o remount,dev,suid,exec /data 2>/dev/null ||
+			busybox mount -o remount,suid /data 2>/dev/null || {
 			msg "${YELLOW}Warning: failed to enable SUID/exec on /data (could not find device)${RST}"
 		}
 	fi
