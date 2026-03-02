@@ -250,107 +250,6 @@ decrement_session() {
 
 #############################################################################
 #
-# FUNCTION TO SAVE ORIGINAL PERMISSIONS OF /data DIRECTORIES
-#
-# Saves the original permissions before modifying them for non-root users
-# with --termux-home
-#
-#############################################################################
-
-save_data_permissions() {
-	distro_name="$1"
-	shift 1
-	if [ -z "$distro_name" ]; then
-		msg "${BRED}Error: save_data_permissions() called without distro_name${RST}"
-		return 1
-	fi
-
-	perms_file="${RUNTIME_DIR}/data/${distro_name}/data_perms"
-	recursive_file="${RUNTIME_DIR}/data/${distro_name}/recursive_paths"
-	busybox mkdir -p "$(dirname "$perms_file")" 2>/dev/null || true
-
-	# Save permissions of the ACTUAL HOST directories we're about to modify.
-	# We must use host paths because we need to restore them after unmounting.
-	{
-		busybox stat -c "%n:%a" "/data" 2>/dev/null
-		busybox stat -c "%n:%a" "/data/data" 2>/dev/null
-		busybox stat -c "%n:%a" "${TERMUX_ROOT_DIR}" 2>/dev/null
-		busybox stat -c "%n:%a" "${TERMUX_FILES_DIR}" 2>/dev/null
-
-		# Save any additional paths provided
-		for path in "$@"; do
-			busybox stat -c "%n:%a" "$path" 2>/dev/null
-			# Record that we need to do recursive cleanup for these
-			echo "$path" >>"$recursive_file"
-		done
-	} >>"$perms_file" 2>/dev/null
-}
-
-#############################################################################
-#
-# FUNCTION TO RESTORE ORIGINAL PERMISSIONS OF /data DIRECTORIES
-#
-# Restores the saved permissions after unmounting
-#
-#############################################################################
-
-restore_data_permissions() {
-	distro_name="$1"
-	if [ -z "$distro_name" ]; then
-		msg "${BRED}Error: restore_data_permissions() called without distro_name${RST}"
-		return 1
-	fi
-
-	perms_file="${RUNTIME_DIR}/data/${distro_name}/data_perms"
-	recursive_file="${RUNTIME_DIR}/data/${distro_name}/recursive_paths"
-
-	if [ ! -f "$perms_file" ]; then
-		# No saved permissions, nothing to restore
-		return 0
-	fi
-
-	# Restore each saved permission
-	while IFS=: read -r path perms; do
-		if [ -n "$path" ] && [ -n "$perms" ] && [ -e "$path" ]; then
-			busybox chmod "$perms" "$path" 2>/dev/null || true
-		fi
-	done <"$perms_file"
-
-	# Strip recursive "other" access for any paths we recursively opened
-	if [ -f "$recursive_file" ]; then
-		while IFS= read -r path; do
-			if [ -d "$path" ]; then
-				busybox chmod -R o-rwx "$path" 2>/dev/null || true
-
-				# If we stripped permissions from a directory in the permissions file,
-				# we should ensure its top-level permission is restored correctly again
-				# (The loop above does this, but order matters. Running chmod 700 last is safest)
-
-				# Find the original permission for this path from the perms file
-				orig_perm=$(grep "^${path}:" "$perms_file" | tail -n 1 | cut -d: -f2)
-				if [ -n "$orig_perm" ]; then
-					busybox chmod "$orig_perm" "$path" 2>/dev/null || true
-				fi
-			fi
-		done <"$recursive_file"
-	fi
-	busybox rm -f "$recursive_file"
-
-	# Restore nosuid and nodev on /data
-	DEVICE_BLOCK="$(busybox grep -w "/data" /proc/mounts | busybox awk '{print $1}' | head -n 1)"
-
-	if [ -n "$DEVICE_BLOCK" ]; then
-		busybox mount -o remount,nosuid,nodev "$DEVICE_BLOCK" /data 2>/dev/null || true
-	else
-		busybox mount -o remount,nosuid,nodev /data 2>/dev/null || true
-	fi
-
-	# Delete the permissions file
-	busybox rm -f "$perms_file"
-}
-
-#############################################################################
-#
 # FUNCTION TO DETECT CPU ARCHITECTURE IN GIVEN DISTRIBUTION
 #
 #############################################################################
@@ -938,9 +837,6 @@ cleanup_all_mounts() {
 	busybox rm -f "$mount_tracker_file"
 
 	[ -f "$isolated_tracker_file" ] && busybox rm -f "$isolated_tracker_file"
-
-	# Restore original permissions of /data directories if they were modified
-	restore_data_permissions "$distro_name"
 }
 
 #############################################################################
@@ -976,6 +872,11 @@ cleanup_failed_installation() {
 }
 
 command_install() {
+	skip_useradd="false"
+	if [ "${SKIP_USERADD:-}" = "1" ] || [ "${SKIP_USERADD:-}" = "true" ]; then
+		skip_useradd="true"
+	fi
+
 	while [ $# -ge 1 ]; do
 		case "$1" in
 		--)
@@ -985,6 +886,34 @@ command_install() {
 		-h | --help)
 			command_install_help
 			return 0
+			;;
+		--skip-useradd)
+			if [ -n "${prefilled_username:-}" ]; then
+				msg
+				msg "${BRED}Error: cannot use '--skip-useradd' and '--adduser' at the same time.${RST}"
+				command_install_help
+				return 1
+			fi
+			skip_useradd="true"
+			;;
+		--adduser)
+			if [ "$skip_useradd" = "true" ]; then
+				msg
+				msg "${BRED}Error: cannot use '--skip-useradd' (or SKIP_USERADD=1) and '--adduser' at the same time.${RST}"
+				command_install_help
+				return 1
+			fi
+			if [ $# -ge 3 ]; then
+				prefilled_username="$2"
+				prefilled_password="$3"
+				skip_useradd="false"
+				shift 2
+			else
+				msg
+				msg "${BRED}Error: option '${YELLOW}--adduser${BRED}' requires USERNAME and PASSWORD arguments.${RST}"
+				command_install_help
+				return 1
+			fi
 			;;
 		-*)
 			msg
@@ -1404,8 +1333,73 @@ command_install() {
 		busybox echo 'EXTRA_GROUPS="aid_inet aid_net_raw aid_bt_admin aid_bt_net"' >>"${INSTALLED_ROOTFS_DIR}/${distro_name}/etc/adduser.conf"
 	fi
 
-	# REMOVE LD_PRELOAD from chroot environment to avoid errors
 	cleanup_profile "LD_PRELOAD"
+
+	if [ "$skip_useradd" != "true" ]; then
+		# If user/pass are provided via --adduser, use them
+		if [ -n "${prefilled_username:-}" ] && [ -n "${prefilled_password:-}" ]; then
+			new_username="$prefilled_username"
+			new_password="$prefilled_password"
+		else
+			busybox printf "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Would you like to create a normal user account? (y/n): ${RST}" >&2
+			read -r create_user_choice
+			if [ "$create_user_choice" = "y" ] || [ "$create_user_choice" = "Y" ] || [ "$create_user_choice" = "yes" ]; then
+				busybox printf "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Enter username: ${RST}" >&2
+				read -r new_username
+				if [ -n "$new_username" ]; then
+					while true; do
+						busybox printf "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Enter password: ${RST}" >&2
+						read -r new_password
+						if [ -z "$new_password" ]; then
+							msg "${BLUE}[${GREEN}!${BLUE}] ${YELLOW}Empty password, setting password same as username${RST}"
+							new_password="$new_username"
+							break
+						fi
+						busybox printf "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Confirm password: ${RST}" >&2
+						read -r confirm_password
+						if [ "$new_password" = "$confirm_password" ]; then
+							break
+						else
+							msg "${BLUE}[${BRED}!${BLUE}] ${BRED}Passwords do not match, please try again${RST}"
+						fi
+					done
+					unset confirm_password
+				else
+					msg "${BLUE}[${BRED}!${BLUE}] ${YELLOW}Empty username, skipping user creation${RST}"
+				fi
+			fi
+			unset create_user_choice
+		fi
+
+		if [ -n "${new_username:-}" ]; then
+			TUID=$(busybox stat -c '%u' /data/data/com.termux)
+
+			busybox mkdir -p "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/dev"
+			safe_mount "/dev" "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/dev" "$distro_name"
+
+			if run_chroot_cmd /bin/sh -c "
+					groupadd -f storage 2>/dev/null || true
+					groupadd -f wheel 2>/dev/null || true
+					groupadd -f polkitd 2>/dev/null || true
+					useradd -m -u $TUID -g users -G wheel,polkitd,audio,video,storage,aid_inet,aid_net_raw -s \$(which bash 2>/dev/null || echo /bin/sh) '$new_username' && \
+					cp -a /etc/skel/. /home/'$new_username'/ 2>/dev/null || true && \
+					chown -R '$new_username':users /home/'$new_username'/ && \
+					echo '$new_username:$new_password' | chpasswd && \
+					mkdir -p /etc/sudoers.d && \
+					echo '$new_username ALL=(ALL:ALL) ALL' > /etc/sudoers.d/'$new_username' && \
+					chmod 0440 /etc/sudoers.d/'$new_username'
+				"; then
+				msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Created user '${new_username}' with UID=${TUID}${RST}"
+			else
+				msg "${BLUE}[${BRED}!${BLUE}] ${YELLOW}User creation failed, you can create a user manually later${RST}"
+			fi
+
+			# Unmount /dev after user creation
+			busybox umount "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}/dev" 2>/dev/null || true
+
+			unset TUID new_password new_username
+		fi
+	fi
 
 	# Run optional distro-specific hook.
 	get_distro_info "$distro_name"
@@ -1432,7 +1426,7 @@ command_install() {
 
 command_install_help() {
 	msg
-	msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}install ${CYAN}[${GREEN}DISTRIBUTION${CYAN}]${RST}"
+	msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}install ${CYAN}[${GREEN}OPTIONS${CYAN}] [${GREEN}DISTRIBUTION${CYAN}]${RST}"
 	msg
 	msg "${CYAN}Command aliases: ${GREEN}i${CYAN}, ${GREEN}in${CYAN}, ${GREEN}ins${CYAN}, ${GREEN}add${RST}"
 	msg
@@ -1441,11 +1435,18 @@ command_install_help() {
 	msg "${CYAN}Options:${RST}"
 	msg
 	msg "  ${GREEN}--help               ${CYAN}- Show this help information${RST}"
+	msg "  ${GREEN}--skip-useradd       ${CYAN}- Skip the user creation prompt${RST}"
+	msg "  ${GREEN}--adduser <u..> <p..>${CYAN}- Automate user creation with USERNAME and PASSWORD${RST}"
+	msg
+	msg "${CYAN}Environment variables:${RST}"
+	msg
+	msg "  ${GREEN}SKIP_USERADD=1       ${CYAN}- Same as --skip-useradd${RST}"
 	msg
 	msg "${CYAN}Examples:${RST}"
 	msg "  ${GREEN}${PROGRAM_NAME} install ubuntu${RST}"
-	msg "  ${GREEN}${PROGRAM_NAME} install debian${RST}"
-	msg "  ${GREEN}${PROGRAM_NAME} install archlinux${RST}"
+	msg "  ${GREEN}${PROGRAM_NAME} install debian --skip-useradd${RST}"
+	msg "  ${GREEN}${PROGRAM_NAME} install alpine --adduser saba mypass123${RST}"
+	msg "  ${GREEN}SKIP_USERADD=1 ${PROGRAM_NAME} install archlinux${RST}"
 	msg
 	msg "${CYAN}Use '${GREEN}${PROGRAM_NAME} list${CYAN}' to see available distributions.${RST}"
 	msg
@@ -1947,13 +1948,13 @@ command_login() {
 
 	if [ -n "$DEVICE_BLOCK" ]; then
 		# Remount with dev and suid options
-		busybox mount -o remount,dev,suid "$DEVICE_BLOCK" /data 2>/dev/null || {
-			msg "${YELLOW}Warning: failed to enable SUID on /data (remount failed)${RST}"
+		busybox mount -o remount,dev,suid,exec "$DEVICE_BLOCK" /data 2>/dev/null || {
+			msg "${YELLOW}Warning: failed to enable SUID/exec on /data (remount failed)${RST}"
 		}
 	else
 		# Fallback: try remounting /data without specifying device (some Android versions might allow this)
-		busybox mount -o remount,dev,suid /data 2>/dev/null || {
-			msg "${YELLOW}Warning: failed to enable SUID on /data (could not find device)${RST}"
+		busybox mount -o remount,dev,suid,exec /data 2>/dev/null || {
+			msg "${YELLOW}Warning: failed to enable SUID/exec on /data (could not find device)${RST}"
 		}
 	fi
 
@@ -1963,6 +1964,8 @@ command_login() {
 
 	# Use Termux home directory if requested.
 	# Notice: since shared and isolated options are mutually exclusive, this remains secure because it can never be reached by an isolated requests
+	# Note: Non-root users created with Termux's UID (via install-time user creation) can natively
+	# access Termux files without any permission hacks.
 	if [ "$use_termux_home" = "true" ]; then
 		if [ "$login_user" = "root" ]; then
 			safe_mount "$TERMUX_HOME" "${INSTALLED_ROOTFS_DIR}/${distro_name}/root" "$distro_name"
@@ -1972,83 +1975,7 @@ command_login() {
 				user_home="/home/${login_user}"
 			fi
 			safe_mount "$TERMUX_HOME" "${INSTALLED_ROOTFS_DIR}/${distro_name}${user_home}" "$distro_name"
-
-			# sorry for this stupid hack , but i don't know any other way to do this
-			#
-			# Fix permissions for non-root users to access Termux home
-			# Save original permissions first so we can restore them later
-			# IMPORTANT: Pass TERMUX_HOME so it gets added to recursive_file
-			save_data_permissions "$distro_name" "$TERMUX_HOME"
-
-			# The problem: /data has restrictive permissions (771, system:system)
-			# Non-root users can't traverse /data to reach /data/data/com.termux
-			# Solution: Make /data readable+executable (traversable) inside the chroot
-			# This is safe because it only affects the chroot, not Android's /data
-			busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}/data" 2>/dev/null || {
-				msg "${YELLOW}Warning: could not make /data traversable for ${login_user}${RST}"
-			}
-
-			# Also ensure the parent directories are traversable
-			if ! busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data"; then
-				msg "${YELLOW}Warning: could not make /data/data traversable${RST}"
-			fi
-			if ! busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}${TERMUX_ROOT_DIR}"; then
-				msg "${YELLOW}Warning: could not make ${TERMUX_ROOT_DIR} traversable${RST}"
-			fi
-			if ! busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}${TERMUX_FILES_DIR}"; then
-				msg "${YELLOW}Warning: could not make ${TERMUX_FILES_DIR} traversable${RST}"
-			fi
-
-			# Make the home directory itself AND CONTENTS accessible to the chroot user
-			# Recursive change needed so user can access subdirectories
-			busybox chmod -R o+rwX "${INSTALLED_ROOTFS_DIR}/${distro_name}${user_home}" 2>/dev/null || {
-				msg "${YELLOW}Warning: could not make ${user_home} writeable${RST}"
-			}
 		fi
-	fi
-
-	# Fix permissions for --work-dir if it's in a restricted location (like /data) and we didn't use --termux-home
-	if [ -n "$login_wd" ] && [ "$login_user" != "root" ] && [ "$use_termux_home" != "true" ] && [ "$make_distro_isolated" != "true" ]; then
-		case "$login_wd" in
-		${TERMUX_ROOT_DIR}/*)
-			# Check if we need to open the 'home' directory too (common case)
-			termux_internal_home="$TERMUX_HOME"
-			extra_paths_to_save=""
-
-			if echo "$login_wd" | busybox grep -q "^$termux_internal_home"; then
-				# Path is inside home, we must ensure home is traversable
-				extra_paths_to_save="$termux_internal_home"
-				busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}${termux_internal_home}" 2>/dev/null || true
-			fi
-
-			# Save permssions for standard paths + the work dir + any intermediates
-			if [ -n "$extra_paths_to_save" ]; then
-				save_data_permissions "$distro_name" "$login_wd" "$extra_paths_to_save"
-			else
-				save_data_permissions "$distro_name" "$login_wd"
-			fi
-
-			# Make /data and parents traversable
-			if ! busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}/data"; then
-				msg "${YELLOW}Warning: could not make /data traversable${RST}"
-			fi
-			if ! busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}/data/data"; then
-				msg "${YELLOW}Warning: could not make /data/data traversable${RST}"
-			fi
-			if ! busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}${TERMUX_ROOT_DIR}"; then
-				msg "${YELLOW}Warning: could not make ${TERMUX_ROOT_DIR} traversable${RST}"
-			fi
-			if ! busybox chmod o+rx "${INSTALLED_ROOTFS_DIR}/${distro_name}${TERMUX_FILES_DIR}"; then
-				msg "${YELLOW}Warning: could not make ${TERMUX_FILES_DIR} traversable${RST}"
-			fi
-
-			# Make the specific work dir accessible recursively
-			# Note: We access via chroot path which maps to host path via bind mount
-			busybox chmod -R o+rwX "${INSTALLED_ROOTFS_DIR}/${distro_name}${login_wd}" 2>/dev/null || {
-				msg "${YELLOW}Warning: could not make ${login_wd} writeable${RST}"
-			}
-			;;
-		esac
 	fi
 
 	if [ "$login_user" != "root" ]; then
@@ -2732,9 +2659,6 @@ command_unmount() {
 		msg "${BLUE}[${GREEN}*${BLUE}] ${YELLOW}Still some mount points found, attempting force cleanup...${RST}"
 		command_unmount_system_points_force "$distro_name"
 	fi
-
-	# Restore original permissions if not already done
-	restore_data_permissions "$distro_name"
 
 	# Update module description
 	sh "$MODDIR/status.sh"

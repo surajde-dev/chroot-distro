@@ -97,6 +97,38 @@ Install a supported distribution:
 chroot-distro install debian
 ```
 
+#### Available Options
+
+- `--skip-useradd` – Skip the user creation prompt during installation
+
+#### Environment Variables
+
+- `SKIP_USERADD=1` – Same as `--skip-useradd` flag
+
+#### User Creation
+
+During installation, you will be prompted to create a normal user account. The created user:
+
+- Gets the **same UID as Termux**, to enabling access to Termux files (e.g., with `--termux-home`)
+
+To skip this prompt entirely:
+
+```bash
+chroot-distro install debian --skip-useradd
+```
+
+or
+
+```bash
+SKIP_USERADD=1 chroot-distro install debian
+```
+
+To automate user creation without interactive prompts:
+
+```bash
+chroot-distro install debian --adduser username password
+```
+
 ### `login <distro>`
 
 Enter a shell session inside the installed distribution:
