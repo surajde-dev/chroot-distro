@@ -1461,6 +1461,10 @@ command_install() {
 }
 
 command_install_help() {
+	if [ "${JOSINIFY}" = "true" ]; then
+		printf '%s\n' '{"command":"install","usage":"'"${PROGRAM_NAME}"' install [OPTIONS] [DISTRIBUTION]","description":"Install a Linux distribution from a remote repository.","aliases":["i","in","ins","add"],"options":[{"name":"--help","description":"Show this help information"},{"name":"--skip-useradd","description":"Skip the user creation prompt"},{"name":"--adduser <USERNAME> <PASSWORD>","description":"Automate user creation with USERNAME and PASSWORD"}],"environment_variables":[{"name":"SKIP_USERADD=1","description":"Same as --skip-useradd"}],"examples":["'"${PROGRAM_NAME}"' install ubuntu","'"${PROGRAM_NAME}"' install debian --skip-useradd","'"${PROGRAM_NAME}"' install alpine --adduser saba mypass123","SKIP_USERADD=1 '"${PROGRAM_NAME}"' install archlinux"]}'
+		return 0
+	fi
 	msg
 	msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}install ${CYAN}[${GREEN}OPTIONS${CYAN}] [${GREEN}DISTRIBUTION${CYAN}]${RST}"
 	msg
@@ -2190,13 +2194,17 @@ command_login() {
 }
 
 command_login_help() {
+	if [ "${JOSINIFY}" = "true" ]; then
+		printf '%s\n' '{"command":"login","usage":"'"${PROGRAM_NAME}"' login [OPTIONS] DISTRIBUTION","description":"Start login shell for the specified distribution.","aliases":["sh"],"options":[{"name":"--user USERNAME","description":"Login as specified user"},{"name":"--work-dir PATH","description":"Set working directory"},{"name":"--isolated","description":"Run in isolated environment"},{"name":"--shared-tmp","description":"Share Termux tmp directory"},{"name":"--termux-home","description":"Mount Termux home directory"},{"name":"--bind PATH[:TARGET]","description":"Bind mount additional paths"},{"name":"--env VAR=VALUE","description":"Set environment variable"},{"name":"--help","description":"Show this help"}]}'
+		return 0
+	fi
 	echo "Usage: ${PROGRAM_NAME} login [OPTIONS] DISTRIBUTION"
 	echo ""
 	echo "Options:"
 	echo "  --user USERNAME        Login as specified user"
 	echo "  --work-dir PATH        Set working directory"
 	echo "  --isolated             Run in isolated environment"
-	echo "  --shared-tmp           Share host tmp directory"
+	echo "  --shared-tmp           Share Termux tmp directory"
 	echo "  --termux-home          Mount Termux home directory"
 	echo "  --bind PATH[:TARGET]   Bind mount additional paths"
 	echo "  --env VAR=VALUE        Set environment variable"
@@ -2455,6 +2463,10 @@ command_clear_cache() {
 }
 
 command_clear_cache_help() {
+	if [ "${JOSINIFY}" = "true" ]; then
+		printf '%s\n' '{"command":"clear-cache","usage":"'"${PROGRAM_NAME}"' clear-cache","description":"Remove all cached rootfs tarballs to reclaim disk space.","aliases":["clear","cl"],"options":[{"name":"--help","description":"Show this help information"}]}'
+		return 0
+	fi
 	msg
 	msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}clear-cache${RST}"
 	msg
@@ -2582,6 +2594,10 @@ command_remove() {
 }
 
 command_remove_help() {
+	if [ "${JOSINIFY}" = "true" ]; then
+		printf '%s\n' '{"command":"remove","usage":"'"${PROGRAM_NAME}"' remove [DISTRIBUTION ALIAS]","description":"Remove a specified Linux distribution.","aliases":["rm"],"options":[{"name":"--help","description":"Show this help information"}]}'
+		return 0
+	fi
 	msg
 	msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}remove ${CYAN}[${GREEN}DISTRIBUTION ALIAS${CYAN}]${RST}"
 	msg
@@ -2824,6 +2840,10 @@ command_unmount_system_points_force() {
 }
 
 command_unmount_help() {
+	if [ "${JOSINIFY}" = "true" ]; then
+		printf '%s\n' '{"command":"unmount","usage":"'"${PROGRAM_NAME}"' unmount [DISTRIBUTION]","description":"Unmount all system points for the specified distribution.","options":[{"name":"--help","description":"Show this help information"}],"examples":["'"${PROGRAM_NAME}"' unmount ubuntu"]}'
+		return 0
+	fi
 	msg
 	msg "${YELLOW}Usage: ${CYAN}${PROGRAM_NAME} ${GREEN}unmount ${CYAN}[${GREEN}DISTRIBUTION${CYAN}]${RST}"
 	msg
