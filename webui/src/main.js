@@ -2,6 +2,7 @@ import { exec, spawn, toast } from "kernelsu";
 
 const LOG_DIR = "/data/local/tmp/chroot-distro-logs";
 const SETTINGS_PATH = "/data/local/chroot-distro/data/settings.conf";
+const DISTRO_SETTINGS_DIR = "/data/local/chroot-distro/data/distro_settings";
 const mainContent = document.getElementById("main-content");
 const settingsView = document.getElementById("settings-view");
 const versionText = document.getElementById("version-text");
@@ -516,12 +517,13 @@ function createTerminalHTML(distroName) {
  * @returns {string}
  */
 function createCommandDropdownHTML(distroName) {
+	// Will be updated with actual command when card is rendered
 	const command = `chroot-distro login ${distroName}`;
 	return `
         <div class="command-dropdown" id="command-${distroName}">
             <div class="command-content">
-                <span class="command-text">${command}</span>
-                <button class="copy-btn" data-command="${command}">Copy</button>
+                <span class="command-text" id="command-text-${distroName}">${command}</span>
+                <button class="copy-btn" data-command="${command}" data-distro="${distroName}">Copy</button>
             </div>
         </div>
     `;
@@ -532,6 +534,7 @@ const ICONS = {
 	start: `<svg viewBox="0 0 24 24" class="btn-icon"><path d="M8,5.14V19.14L19,12.14L8,5.14Z"/></svg>`,
 	uninstall: `<svg viewBox="0 0 24 24" class="btn-icon"><path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>`,
 	stop: `<svg viewBox="0 0 24 24" class="btn-icon"><path d="M18,18H6V6H18V18Z"/></svg>`,
+	settings: `<svg viewBox="0 0 24 24" class="btn-icon"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.04.24.24.41.48.41h3.84c.24 0 .43-.17.47-.41l.36-2.54c.59-.24 1.13-.57 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.08-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`,
 };
 
 /**
@@ -553,6 +556,7 @@ function createDistroCard(distro) {
             <div class="btn-container">
                 <button class="action-btn start ripple-element icon-btn" data-distro="${distro.name}" data-action="start" title="Start / Copy Login Command">${ICONS.start}</button>
                 ${isRunning ? `<button class="action-btn stop ripple-element icon-btn" data-distro="${distro.name}" data-action="stop" title="Stop / Unmount">${ICONS.stop}</button>` : ""}
+                <button class="action-btn ripple-element icon-btn" data-distro="${distro.name}" data-action="settings" title="Login Settings">${ICONS.settings}</button>
                 <button class="action-btn uninstall ripple-element icon-btn" data-distro="${distro.name}" data-action="uninstall" title="Uninstall">${ICONS.uninstall}</button>
             </div>
         `;
@@ -781,23 +785,296 @@ async function validateAndInstall(e) {
 	await installWithTerminal(distroName, btn, card, username, password);
 }
 
+// ── Distro Settings ─────────────────────────────────────────────────
+
+let cachedLoginOptions = null;
+let currentSettingsDistro = null;
+
+/**
+ * Fetch login options from JOSINIFY=true chroot-distro login --help
+ * @returns {Promise<Array>}
+ */
+async function fetchLoginOptions() {
+	if (cachedLoginOptions) return cachedLoginOptions;
+	try {
+		const { errno, stdout } = await exec("JOSINIFY=true chroot-distro login --help");
+		if (errno === 0 && stdout) {
+			const data = JSON.parse(stdout.trim());
+			cachedLoginOptions = data.options || [];
+			return cachedLoginOptions;
+		}
+	} catch (e) {
+		console.error("Failed to fetch login options:", e);
+	}
+	// Fallback
+	return [];
+}
+
+/**
+ * Fetch users list from a distro by parsing /etc/passwd
+ * @param {string} distroName
+ * @returns {Promise<Array<{name:string, uid:number}>>}
+ */
+async function fetchDistroUsers(distroName) {
+	try {
+		const passwdPath = `/data/local/chroot-distro/installed-rootfs/${distroName}/etc/passwd`;
+		const { errno, stdout } = await exec(`cat "${passwdPath}" 2>/dev/null`);
+		if (errno === 0 && stdout) {
+			const users = [];
+			const lines = stdout.trim().split("\n");
+			for (const line of lines) {
+				const parts = line.split(":");
+				if (parts.length < 7) continue;
+				const name = parts[0];
+				const uid = parseInt(parts[2], 10);
+				const shell = parts[6];
+				// Include root and regular users with valid shells
+				if ((uid === 0 || uid >= 1000) && !shell.includes("nologin") && !shell.includes("/bin/false") && !name.startsWith("nobody") && !name.startsWith("aid_")) {
+					users.push({ name, uid });
+				}
+			}
+			return users;
+		}
+	} catch (e) {
+		console.error("Failed to fetch users:", e);
+	}
+	return [{ name: "root", uid: 0 }];
+}
+
+/**
+ * Load per-distro settings from config file
+ * @param {string} distroName
+ * @returns {Promise<Object>}
+ */
+async function loadDistroSettings(distroName) {
+	const defaults = {
+		USER: "",
+		ISOLATED: "false",
+		SHARED_TMP: "false",
+		TERMUX_HOME: "false",
+		WORK_DIR: "",
+		BIND: "",
+		ENV: "",
+	};
+	try {
+		const filePath = `${DISTRO_SETTINGS_DIR}/${distroName}.conf`;
+		const { errno, stdout } = await exec(`cat "${filePath}" 2>/dev/null`);
+		if (errno === 0 && stdout) {
+			const settings = { ...defaults };
+			for (const line of stdout.split("\n")) {
+				const trimmed = line.trim();
+				if (!trimmed || !trimmed.includes("=")) continue;
+				const eqIdx = trimmed.indexOf("=");
+				const key = trimmed.substring(0, eqIdx);
+				const value = trimmed.substring(eqIdx + 1);
+				if (key in settings) settings[key] = value;
+			}
+			return settings;
+		}
+	} catch (e) {
+		console.warn("Failed to load distro settings:", e);
+	}
+	return defaults;
+}
+
+/**
+ * Save per-distro settings to config file
+ * @param {string} distroName
+ * @param {Object} settings
+ */
+async function saveDistroSettings(distroName, settings) {
+	const filePath = `${DISTRO_SETTINGS_DIR}/${distroName}.conf`;
+	const lines = Object.entries(settings)
+		.map(([k, v]) => `${k}=${v}`)
+		.join("\n");
+	try {
+		await exec(`mkdir -p "${DISTRO_SETTINGS_DIR}" && printf '%s\\n' '${shellEscape(lines)}' > "${filePath}"`);
+	} catch (e) {
+		console.error("Failed to save distro settings:", e);
+		showToast("Failed to save settings", true);
+	}
+}
+
+/**
+ * Build the full login command for a distro based on saved settings
+ * @param {string} distroName
+ * @returns {Promise<string>}
+ */
+async function buildLoginCommand(distroName) {
+	const s = await loadDistroSettings(distroName);
+	let cmd = `chroot-distro login`;
+	if (s.USER && s.USER !== "root" && s.USER !== "") cmd += ` --user ${s.USER}`;
+	if (s.ISOLATED === "true") cmd += " --isolated";
+	if (s.SHARED_TMP === "true") cmd += " --shared-tmp";
+	if (s.TERMUX_HOME === "true") cmd += " --termux-home";
+	if (s.WORK_DIR) cmd += ` --work-dir ${s.WORK_DIR}`;
+	if (s.BIND) {
+		for (const b of s.BIND.split(",").filter(Boolean)) {
+			cmd += ` --bind ${b}`;
+		}
+	}
+	if (s.ENV) {
+		for (const e of s.ENV.split(",").filter(Boolean)) {
+			cmd += ` --env ${e}`;
+		}
+	}
+	cmd += ` ${distroName}`;
+	return cmd;
+}
+
+/**
+ * Update the command dropdown text and copy button for a distro
+ * @param {string} distroName
+ */
+async function updateCommandDisplay(distroName) {
+	const command = await buildLoginCommand(distroName);
+	const textEl = document.getElementById(`command-text-${distroName}`);
+	if (textEl) textEl.textContent = command;
+	const card = document.getElementById(`card-${distroName}`);
+	if (card) {
+		const copyBtn = card.querySelector(".copy-btn");
+		if (copyBtn) copyBtn.dataset.command = command;
+	}
+}
+
+/**
+ * Show distro settings modal
+ * @param {string} distroName
+ */
+async function showDistroSettingsModal(distroName) {
+	currentSettingsDistro = distroName;
+
+	const modal = document.getElementById("distro-settings-modal");
+	const title = document.getElementById("distro-settings-title");
+	const loading = document.getElementById("distro-settings-loading");
+	const form = document.getElementById("distro-settings-form");
+	const fields = document.getElementById("distro-settings-fields");
+
+	title.textContent = `${distroName} — Login Settings`;
+	loading.style.display = "";
+	form.style.display = "none";
+	modal.classList.add("open");
+
+	await new Promise((r) => setTimeout(r, 50));
+
+	const [options, users, settings] = await Promise.all([fetchLoginOptions(), fetchDistroUsers(distroName), loadDistroSettings(distroName)]);
+
+	const optionMap = {};
+	for (const opt of options) {
+		const flag = opt.name.split(" ")[0];
+		optionMap[flag] = opt.description;
+	}
+
+	fields.innerHTML = "";
+
+	const userLabel = optionMap["--user"] || "Login as specified user";
+	fields.innerHTML += `
+		<div class="form-group">
+			<label class="form-label">${userLabel}</label>
+			<select class="form-select" id="ds-user">
+				${users.map((u) => `<option value="${u.name}" ${settings.USER === u.name ? "selected" : ""}>${u.name} (uid: ${u.uid})</option>`).join("")}
+			</select>
+		</div>
+	`;
+
+	const toggles = [
+		{ flag: "--isolated", key: "ISOLATED" },
+		{ flag: "--shared-tmp", key: "SHARED_TMP" },
+		{ flag: "--termux-home", key: "TERMUX_HOME" },
+	];
+
+	for (const t of toggles) {
+		const desc = optionMap[t.flag] || t.flag;
+		const checked = settings[t.key] === "true" ? "checked" : "";
+		fields.innerHTML += `
+			<div class="setting-row">
+				<div>
+					<div class="setting-label">${desc}</div>
+				</div>
+				<label class="toggle-switch">
+					<input type="checkbox" id="ds-${t.key}" ${checked} />
+					<span class="toggle-slider"></span>
+				</label>
+			</div>
+		`;
+	}
+
+	const textInputs = [
+		{ flag: "--work-dir", key: "WORK_DIR", placeholder: "/path/to/dir" },
+		{ flag: "--bind", key: "BIND", placeholder: "/src:/dst, /src2:/dst2" },
+		{ flag: "--env", key: "ENV", placeholder: "VAR1=val1, VAR2=val2" },
+	];
+
+	for (const ti of textInputs) {
+		const desc = optionMap[ti.flag] || ti.flag;
+		fields.innerHTML += `
+			<div class="form-group">
+				<label class="form-label">${desc}</label>
+				<input type="text" class="form-input" id="ds-${ti.key}" placeholder="${ti.placeholder}" value="${settings[ti.key] || ""}" />
+			</div>
+		`;
+	}
+
+	loading.style.display = "none";
+	form.style.display = "";
+}
+
+/**
+ * Close distro settings modal
+ */
+function closeDistroSettingsModal() {
+	const modal = document.getElementById("distro-settings-modal");
+	modal.classList.remove("open");
+	currentSettingsDistro = null;
+}
+
+/**
+ * Save distro settings from the modal form
+ * @param {Event} e
+ */
+async function saveDistroSettingsForm(e) {
+	e.preventDefault();
+	if (!currentSettingsDistro) return;
+
+	const distroName = currentSettingsDistro;
+	const settings = {
+		USER: document.getElementById("ds-user")?.value || "",
+		ISOLATED: document.getElementById("ds-ISOLATED")?.checked ? "true" : "false",
+		SHARED_TMP: document.getElementById("ds-SHARED_TMP")?.checked ? "true" : "false",
+		TERMUX_HOME: document.getElementById("ds-TERMUX_HOME")?.checked ? "true" : "false",
+		WORK_DIR: document.getElementById("ds-WORK_DIR")?.value?.trim() || "",
+		BIND: document.getElementById("ds-BIND")?.value?.trim() || "",
+		ENV: document.getElementById("ds-ENV")?.value?.trim() || "",
+	};
+
+	await saveDistroSettings(distroName, settings);
+	await updateCommandDisplay(distroName);
+	closeDistroSettingsModal();
+	showToast(`Settings saved for ${distroName}`);
+}
+
 /**
  * Handle action based on action type
  * @param {string} distroName
- * @param {string} action - 'start', 'install', or 'uninstall'
+ * @param {string} action - 'start', 'install', 'uninstall', or 'settings'
  * @param {HTMLButtonElement} btn
  * @param {HTMLElement} card
  */
 async function handleAction(distroName, action, btn, card) {
 	switch (action) {
-		case "start":
-			const command = `chroot-distro login ${distroName}`;
+		case "start": {
+			const command = await buildLoginCommand(distroName);
 			await copyToClipboard(command);
 
 			const commandDropdown = card.querySelector(`#command-${distroName}`);
 			if (commandDropdown) {
 				commandDropdown.classList.add("open");
 			}
+			break;
+		}
+
+		case "settings":
+			await showDistroSettingsModal(distroName);
 			break;
 
 		case "install":
@@ -1163,6 +1440,9 @@ function renderDistros(distros) {
 	distros.forEach((distro) => {
 		const card = createDistroCard(distro);
 		mainContent.appendChild(card);
+		if (distro.installed) {
+			updateCommandDisplay(distro.name);
+		}
 	});
 
 	if (distros.length === 0) {
@@ -1454,6 +1734,20 @@ async function init() {
 	if (userSetupModal)
 		userSetupModal.addEventListener("click", (e) => {
 			if (e.target === userSetupModal) closeUserSetupModal();
+		});
+
+	// Distro settings modal events
+	const distroSettingsModal = document.getElementById("distro-settings-modal");
+	const distroSettingsForm = document.getElementById("distro-settings-form");
+	const closeDistroSettingsBtn = document.getElementById("close-distro-settings-modal");
+	const distroSettingsCancelBtn = document.getElementById("distro-settings-cancel");
+
+	if (distroSettingsForm) distroSettingsForm.addEventListener("submit", saveDistroSettingsForm);
+	if (closeDistroSettingsBtn) closeDistroSettingsBtn.addEventListener("click", closeDistroSettingsModal);
+	if (distroSettingsCancelBtn) distroSettingsCancelBtn.addEventListener("click", closeDistroSettingsModal);
+	if (distroSettingsModal)
+		distroSettingsModal.addEventListener("click", (e) => {
+			if (e.target === distroSettingsModal) closeDistroSettingsModal();
 		});
 
 	if (searchBtn) {
