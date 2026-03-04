@@ -23,6 +23,7 @@ const searchCloseBtn = document.getElementById("search-close-btn");
 const searchBtn = document.getElementById("search-btn");
 
 let allDistros = [];
+let currentSortOrder = "az";
 
 const activeTerminals = new Map();
 const activeWatchers = new Map();
@@ -56,16 +57,6 @@ function removeActiveTask(distro) {
 	const tasks = JSON.parse(localStorage.getItem("active_tasks") || "{}");
 	delete tasks[distro];
 	localStorage.setItem("active_tasks", JSON.stringify(tasks));
-}
-
-/**
- * Get active task for distro
- * @param {string} distro
- * @returns {Object|null}
- */
-function getActiveTask(distro) {
-	const tasks = JSON.parse(localStorage.getItem("active_tasks") || "{}");
-	return tasks[distro] || null;
 }
 
 /**
@@ -1382,6 +1373,36 @@ async function uninstallWithTerminal(distroName, btn, card) {
 }
 
 /**
+ * Sorts the existing distro cards in the DOM based on currentSortOrder and allDistros
+ */
+function sortDistroCards() {
+	const cards = Array.from(mainContent.querySelectorAll(".distro-card"));
+
+	cards.sort((a, b) => {
+		const nameA = a.id.replace("card-", "");
+		const nameB = b.id.replace("card-", "");
+		const distroA = allDistros.find((d) => d.name === nameA);
+		const distroB = allDistros.find((d) => d.name === nameB);
+
+		if (!distroA || !distroB) return 0;
+
+		if (currentSortOrder === "za") {
+			return distroB.name.localeCompare(distroA.name);
+		} else if (currentSortOrder === "installed") {
+			if (distroA.installed !== distroB.installed) return distroA.installed ? -1 : 1;
+			return distroA.name.localeCompare(distroB.name);
+		} else if (currentSortOrder === "running") {
+			if (distroA.running !== distroB.running) return distroA.running ? -1 : 1;
+			return distroA.name.localeCompare(distroB.name);
+		} else {
+			return distroA.name.localeCompare(distroB.name);
+		}
+	});
+
+	cards.forEach((card) => mainContent.appendChild(card));
+}
+
+/**
  * Refresh distro card after install
  * @param {string} distroName
  * @param {HTMLElement} oldCard
@@ -1389,11 +1410,16 @@ async function uninstallWithTerminal(distroName, btn, card) {
 async function refreshDistroCard(distroName, oldCard) {
 	try {
 		const distros = await fetchDistros();
+		allDistros = distros;
 		const distroInfo = distros.find((d) => d.name === distroName);
 
 		if (distroInfo) {
 			const newCard = createDistroCard(distroInfo);
 			oldCard.replaceWith(newCard);
+			if (distroInfo.installed) {
+				updateCommandDisplay(distroName);
+			}
+			sortDistroCards();
 		}
 	} catch (e) {
 		console.error("Failed to refresh card:", e);
@@ -1424,12 +1450,27 @@ function renderError(message) {
 function renderDistros(distros) {
 	mainContent.innerHTML = "";
 
+	let sortedDistros = [...distros];
+	sortedDistros.sort((a, b) => {
+		if (currentSortOrder === "za") {
+			return b.name.localeCompare(a.name);
+		} else if (currentSortOrder === "installed") {
+			if (a.installed !== b.installed) return a.installed ? -1 : 1;
+			return a.name.localeCompare(b.name);
+		} else if (currentSortOrder === "running") {
+			if (a.running !== b.running) return a.running ? -1 : 1;
+			return a.name.localeCompare(b.name);
+		} else {
+			return a.name.localeCompare(b.name);
+		}
+	});
+
 	const title = document.createElement("div");
 	title.className = "section-title";
 	title.textContent = "Available Distributions";
 	mainContent.appendChild(title);
 
-	distros.forEach((distro) => {
+	sortedDistros.forEach((distro) => {
 		const card = createDistroCard(distro);
 		mainContent.appendChild(card);
 		if (distro.installed) {
@@ -1437,7 +1478,7 @@ function renderDistros(distros) {
 		}
 	});
 
-	if (distros.length === 0) {
+	if (sortedDistros.length === 0) {
 		mainContent.innerHTML += `
             <div class="loading-container">
                 <span>No distributions found</span>
@@ -1629,6 +1670,9 @@ async function loadSettings() {
 				if (trimmed.startsWith("SERVICED_VERBOSE_MODE=")) {
 					verbose = trimmed.split("=")[1].trim() === "true";
 				}
+				if (trimmed.startsWith("SORT_ORDER=")) {
+					currentSortOrder = trimmed.split("=")[1].trim();
+				}
 			});
 		}
 
@@ -1637,6 +1681,9 @@ async function loadSettings() {
 			updateVerboseToggleState(serviced);
 		}
 		if (toggleServicedVerbose) toggleServicedVerbose.checked = verbose;
+
+		const selectSortOrder = document.getElementById("select-sort-order");
+		if (selectSortOrder) selectSortOrder.value = currentSortOrder;
 	} catch (e) {
 		console.warn("Failed to load settings:", e);
 		if (toggleServiced) toggleServiced.checked = false;
@@ -1666,10 +1713,10 @@ async function loadSettings() {
 /**
  * Save a single setting to file
  * @param {string} key
- * @param {boolean} value
+ * @param {boolean|string} value
  */
 async function saveSetting(key, value) {
-	const valStr = value ? "true" : "false";
+	const valStr = typeof value === "boolean" ? (value ? "true" : "false") : value;
 	const cmd = `
         mkdir -p "$(dirname "${SETTINGS_PATH}")"
         if [ ! -f "${SETTINGS_PATH}" ]; then touch "${SETTINGS_PATH}"; fi
@@ -1782,6 +1829,19 @@ async function init() {
 	if (togglePhantom) {
 		togglePhantom.addEventListener("change", (e) => {
 			setPhantomProcessKiller(e.target.checked);
+		});
+	}
+
+	const selectSortOrder = document.getElementById("select-sort-order");
+	if (selectSortOrder) {
+		selectSortOrder.addEventListener("change", (e) => {
+			currentSortOrder = e.target.value;
+			saveSetting("SORT_ORDER", currentSortOrder);
+			if (!searchContainer.classList.contains("hidden") && searchInput.value) {
+				filterDistros(searchInput.value);
+			} else {
+				sortDistroCards();
+			}
 		});
 	}
 
