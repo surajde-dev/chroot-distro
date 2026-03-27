@@ -1220,12 +1220,18 @@ command_install() {
 	msg "${BLUE}[${GREEN}*${BLUE}] ${CYAN}Extracting rootfs, please wait...${RST}"
 
 	# --exclude='dev' - need to exclude /dev directory which may contain device files.
+	# Set umask to 0000 to prevent Android's default umask (often 0077)
+	# from stripping group/other permission bits during extraction.
+	old_umask=$(umask)
+	umask 0022
 
-	# Replace the problematic section with:
 	busybox tar -C "${INSTALLED_ROOTFS_DIR:?}/${distro_name:?}" \
+		--numeric-owner \
 		--strip-components="${TARBALL_STRIP_OPT}" \
 		--exclude="dev" \
 		-xf "${DOWNLOAD_CACHE_DIR}/${tarball_name}" 2>&1 | busybox grep -v "/linkerconfig/" >&2
+
+	umask "$old_umask"
 
 	# If no /etc in rootfs, terminate installation.
 	# This usually indicates that downloaded distribution tarball doesn't contain
