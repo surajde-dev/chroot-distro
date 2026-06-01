@@ -1,6 +1,8 @@
+import argparse
 import os
 import signal
 import sys
+from typing import Any
 
 from chroot_distro.commands.backup import command_backup
 from chroot_distro.commands.build import command_build
@@ -28,7 +30,7 @@ from chroot_distro.parser import (
 )
 
 
-def command_stub(args) -> None:
+def command_stub(args: argparse.Namespace) -> None:
     raise NotImplementedError(f"Command '{args.command}' is not yet implemented.")
 
 
@@ -52,7 +54,7 @@ _COMMAND_HANDLERS = {
 }
 
 
-def _sigquit_to_keyboard_interrupt(_signum, _frame):
+def _sigquit_to_keyboard_interrupt(_signum: int, _frame: Any) -> None:
     raise KeyboardInterrupt()
 
 
@@ -73,7 +75,7 @@ def _ensure_root_user(no_elevate: bool = False, use_sudo: bool = False) -> None:
     elevate_or_die(use_sudo=use_sudo)
 
 
-def _dispatch_help(raw_args) -> bool:
+def _dispatch_help(raw_args: list[str]) -> bool:
     """Render per-command help when -h/--help/--usage is given."""
     if len(raw_args) < 2 or raw_args[1] not in ("-h", "--help", "--usage"):
         return False
@@ -84,7 +86,7 @@ def _dispatch_help(raw_args) -> bool:
     return False
 
 
-def _reject_unknown_command(raw_args) -> None:
+def _reject_unknown_command(raw_args: list[str]) -> None:
     """Exit with help text when the first arg names no known command."""
     if not raw_args:
         return
@@ -97,7 +99,7 @@ def _reject_unknown_command(raw_args) -> None:
         sys.exit(1)
 
 
-def _split_separator(canonical, raw_args, args):
+def _split_separator(canonical: str, raw_args: list[str], args: argparse.Namespace) -> None:
     """Set args.login_cmd / args.run_args from tokens after a literal '--'."""
     if canonical == "login":
         if "--" in raw_args:

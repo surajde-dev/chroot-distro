@@ -109,5 +109,14 @@ module = "tests.*"
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 
+[[tool.mypy.overrides]]
+module = [
+    "chroot_distro.cli",
+    "chroot_distro.paths",
+    "chroot_distro.constants"
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
 [dependency-groups]
 dev = ["build>=1.5.0", "twine>=6.2.0"]
