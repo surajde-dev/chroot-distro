@@ -88,6 +88,11 @@ select = [
 ignore = ["E501", "PT012", "PLC0415"]
 
 
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
