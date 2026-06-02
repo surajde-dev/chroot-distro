@@ -239,6 +239,12 @@ Missing layers are downloaded in parallel (default **4** workers). Set
 `CD_DOWNLOAD_WORKERS` to tune concurrency (integer **1–8**; values above
 8 are capped).
 
+On Termux, `list` does not elevate privileges. If containers were
+installed as root, run once as root to fix legacy manifest permissions:
+`su -c 'chmod -R a+r $PREFIX/var/lib/chroot-distro/containers/*/manifest.json'`
+(or reinstall). New installs write `manifest.json` as world-readable
+(`0644`).
+
 **Examples:**
 
 ```sh

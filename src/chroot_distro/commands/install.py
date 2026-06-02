@@ -211,7 +211,7 @@ def _run_install(
                 "image_config": metadata.get("image_config", {}),
             }
             try:
-                with atomic_replace(container_manifest(install_name)) as tmp, open(tmp, "w") as fh:
+                with atomic_replace(container_manifest(install_name), mode=0o644) as tmp, open(tmp, "w") as fh:
                     json.dump(manifest_data, fh, indent=2)
             except OSError as exc:
                 log_error(f"Warning: could not write manifest.json: {exc}")

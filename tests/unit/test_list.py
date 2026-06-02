@@ -78,6 +78,19 @@ def test_read_image_source_from_manifest(tmp_path, monkeypatch):
     assert _read_image_source(name) == "ubuntu:24.04 (aarch64)"
 
 
+def test_read_image_source_permission_denied(monkeypatch):
+    import errno
+
+    monkeypatch.setattr("chroot_distro.commands.list_cmd.os.path.isfile", lambda _p: True)
+    monkeypatch.setattr("chroot_distro.commands.list_cmd._ensure_manifest_readable", lambda _p: None)
+
+    def _deny_open(*_args, **_kwargs):
+        raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr("builtins.open", _deny_open)
+    assert _read_image_source("alpine") == "alpine"
+
+
 def test_read_image_source_without_manifest(tmp_path, monkeypatch):
     containers = tmp_path / "containers"
     name = "plain"

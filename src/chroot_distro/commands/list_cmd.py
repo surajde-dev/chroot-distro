@@ -1,3 +1,5 @@
+import contextlib
+import errno
 import json
 import os
 import subprocess
@@ -50,14 +52,39 @@ def _rootfs_size_walk(rootfs: str) -> int:
     return total
 
 
+def _ensure_manifest_readable(manifest_path: str) -> None:
+    """Raise readability of legacy ``0o600`` manifests (mkstemp default).
+
+    Installs that ran as root left manifests unreadable to the Termux app user
+    when ``list`` runs without elevation. World-readable ``0o644`` is safe here
+    (no credentials in manifest.json).
+    """
+    try:
+        st = os.stat(manifest_path)
+    except OSError:
+        return
+    if st.st_mode & 0o004:
+        return
+    with contextlib.suppress(OSError):
+        os.chmod(manifest_path, (st.st_mode & 0o777) | 0o644)
+
+
 def _read_image_source(name: str) -> str:
     manifest_path = container_manifest(name)
     if not os.path.isfile(manifest_path):
         return "local archive"
+    _ensure_manifest_readable(manifest_path)
     try:
         with open(manifest_path, encoding="utf-8") as fh:
-            data: dict[str, typing.Any] = json.load(fh)
-    except (OSError, json.JSONDecodeError):
+            raw = fh.read()
+        if not raw.strip():
+            return "local archive"
+        data: dict[str, typing.Any] = json.loads(raw)
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            return name
+        return "unknown"
+    except json.JSONDecodeError:
         return "unknown"
     image_ref = data.get("image_ref") or ""
     if not image_ref:
