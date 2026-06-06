@@ -544,6 +544,18 @@ def _command_login_inner(container_name: str, args) -> None:
                     crit_error(f"Failed to mount bindings: {e}")
                     sys.exit(1)
 
+            # Phase 1b: fix /tmp permissions when shared from Termux
+            # Termux's $PREFIX/tmp is owned by the app UID with mode 700,
+            # which prevents guest users like _apt from creating temp files.
+            # apt's gpgv needs a world-writable /tmp to function correctly.
+            if IS_TERMUX and shared_tmp and dist_type != "termux":
+                chroot_tmp = os.path.join(rootfs, "tmp")
+                if os.path.isdir(chroot_tmp):
+                    try:
+                        os.chmod(chroot_tmp, 0o1777)
+                    except OSError:
+                        pass
+
             # Phase 2: special filesystem mounts
             try:
                 specials = bindings.get_special_mounts(

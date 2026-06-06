@@ -33,7 +33,10 @@ def _read_data_mount() -> tuple[str, str, str] | None:
 
 
 def ensure_data_suid() -> bool:
-    """Remount host /data with suid when nosuid is set (required for sudo in chroot).
+    """Remount host /data with suid+exec when nosuid or noexec is set.
+
+    Required for sudo in chroot (nosuid) and for gpgv/apt to work
+    when --shared-tmp bind-mounts $PREFIX/tmp as /tmp (noexec).
 
     Only replaces nosuid/nodev/noexec flags; preserves other mount options to avoid
     EINVAL from stripping lazytime, seclabel, etc.
@@ -47,7 +50,7 @@ def ensure_data_suid() -> bool:
         return False
 
     device, _mount_point, opts = entry
-    if "nosuid" not in opts:
+    if "nosuid" not in opts and "noexec" not in opts:
         return True
 
     new_opts = opts.replace("nosuid", "suid").replace("nodev", "dev").replace("noexec", "exec")
