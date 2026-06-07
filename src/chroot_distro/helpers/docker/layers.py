@@ -92,9 +92,17 @@ def download_blob(
     Streams the bytes through sha256 and verifies the result against the
     expected *digest* before promoting the .tmp file.
 
-    Retries up to ``_MAX_RETRIES`` times on transient network / SSL
+    Retries up to the configured retry limit times on transient network / SSL
     failures with exponential backoff.
     """
+    from chroot_distro.constants import download_max_retries, download_rate_limit
+    from chroot_distro.rate_limit import TokenBucket
+
+    max_retries = download_max_retries()
+    retry_backoff = tuple(min(2**i, 30) for i in range(max_retries))
+    rate = download_rate_limit()
+    bucket = TokenBucket(rate) if rate > 0 else None
+
     dest = layer_cache_path(digest)
     if os.path.isfile(dest):
         return dest
@@ -167,86 +175,93 @@ def download_blob(
                 if len(segments) == 1:
                     raise _FallbackToSingleError
 
-                # Pre-fill byte progress with already downloaded bytes
-                if byte_progress:
+                progress = byte_progress or AggregateByteProgress(probe.content_length, label=expected_hex[:12])
+                try:
+                    # Pre-fill byte progress with already downloaded bytes
                     already_downloaded = 0
                     for seg in segments:
                         if os.path.isfile(seg.tmp_path):
                             already_downloaded += os.path.getsize(seg.tmp_path)
                     if already_downloaded:
-                        byte_progress.add(already_downloaded)
+                        progress.add(already_downloaded)
 
-                original_parsed = urllib.parse.urlparse(url)
-                final_parsed = urllib.parse.urlparse(probe.final_url)
-                seg_headers = {**_ua()}
-                if token and original_parsed.netloc == final_parsed.netloc:
-                    seg_headers["Authorization"] = f"Bearer {token}"
+                    original_parsed = urllib.parse.urlparse(url)
+                    final_parsed = urllib.parse.urlparse(probe.final_url)
+                    seg_headers = {**_ua()}
+                    if token and original_parsed.netloc == final_parsed.netloc:
+                        seg_headers["Authorization"] = f"Bearer {token}"
 
-                local_abort = abort_event or threading.Event()
-                with ThreadPoolExecutor(max_workers=len(segments)) as pool:
-                    futures = {
-                        pool.submit(
-                            _download_segment,
-                            seg,
-                            probe.final_url,
-                            seg_headers,
-                            byte_progress,
-                            local_abort,
-                        ): seg
-                        for seg in segments
-                    }
-                    for future in as_completed(futures):
-                        try:
+                    local_abort = abort_event or threading.Event()
+                    pool = ThreadPoolExecutor(max_workers=len(segments))
+                    try:
+                        futures = {
+                            pool.submit(
+                                _download_segment,
+                                seg,
+                                probe.final_url,
+                                seg_headers,
+                                progress,
+                                local_abort,
+                                bucket,
+                            ): seg
+                            for seg in segments
+                        }
+                        for future in as_completed(futures):
                             future.result()
-                        except KeyboardInterrupt:
-                            local_abort.set()
-                            pool.shutdown(wait=False, cancel_futures=True)
-                            raise
-                        except Exception as exc:
-                            local_abort.set()
-                            pool.shutdown(wait=False, cancel_futures=True)
-                            raise _FallbackToSingleError from exc
+                    except KeyboardInterrupt:
+                        local_abort.set()
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        raise
+                    except Exception as exc:
+                        local_abort.set()
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        raise _FallbackToSingleError from exc
+                    else:
+                        pool.shutdown(wait=True)
 
-                success = False
-                try:
-                    with atomic_replace(dest) as tmp:
-                        with open(tmp, "wb") as out:
-                            for seg in sorted(segments, key=lambda s: s.index):
-                                with open(seg.tmp_path, "rb") as inp:
-                                    shutil.copyfileobj(inp, out, length=1 << 20)
-                            out.flush()
-                            os.fsync(out.fileno())
+                    success = False
+                    try:
+                        with atomic_replace(dest) as tmp:
+                            with open(tmp, "wb") as out:
+                                for seg in sorted(segments, key=lambda s: s.index):
+                                    with open(seg.tmp_path, "rb") as inp:
+                                        shutil.copyfileobj(inp, out, length=1 << 20)
+                                out.flush()
+                                os.fsync(out.fileno())
 
-                        # Verify the temp file BEFORE replacing dest
-                        hasher = hashlib.sha256()
-                        with open(tmp, "rb") as fh:
-                            for chunk in iter(lambda: fh.read(262144), b""):
-                                hasher.update(chunk)
-                        actual_hex = hasher.hexdigest()
-                        if actual_hex != expected_hex.lower():
-                            raise RuntimeError(
-                                f"Layer integrity check failed for digest '{digest}': "
-                                f"expected {expected_hex}, got {actual_hex}."
-                            )
-                    success = True
-                    return dest
-                finally:
-                    if success:
-                        for seg in segments:
+                            # Verify the temp file BEFORE replacing dest
+                            hasher = hashlib.sha256()
+                            with open(tmp, "rb") as fh:
+                                for chunk in iter(lambda: fh.read(262144), b""):
+                                    hasher.update(chunk)
+                            actual_hex = hasher.hexdigest()
+                            if actual_hex != expected_hex.lower():
+                                raise RuntimeError(
+                                    f"Layer integrity check failed for digest '{digest}': "
+                                    f"expected {expected_hex}, got {actual_hex}."
+                                )
+                        success = True
+                        return dest
+                    finally:
+                        if success:
+                            for seg in segments:
+                                with contextlib.suppress(OSError):
+                                    os.remove(seg.tmp_path)
                             with contextlib.suppress(OSError):
-                                os.remove(seg.tmp_path)
-                        with contextlib.suppress(OSError):
-                            os.remove(chunks_meta_path)
+                                os.remove(chunks_meta_path)
+                finally:
+                    if byte_progress is None:
+                        progress.clear()
         except _FallbackToSingleError:
             pass
         except Exception:
             raise
 
     last_exc: BaseException | None = None
-    for attempt in range(_MAX_RETRIES + 1):
+    for attempt in range(max_retries + 1):
         if attempt > 0:
-            delay = _RETRY_BACKOFF[min(attempt - 1, len(_RETRY_BACKOFF) - 1)]
-            warn(f"Retry {attempt}/{_MAX_RETRIES} in {delay}s (reason: {last_exc})...")
+            delay = retry_backoff[attempt - 1] if attempt - 1 < len(retry_backoff) else 30
+            warn(f"Retry {attempt}/{max_retries} in {delay}s (reason: {last_exc})...")
             time.sleep(delay)
 
         headers = {**_ua()}
@@ -262,6 +277,8 @@ def download_blob(
                     total = int(resp.headers.get("Content-Length", 0))
                     downloaded = 0
                     unsent = 0  # bytes not yet reported to aggregate
+                    if byte_progress is None:
+                        draw_bytes_bar(0, total, noun="downloaded")
                     while True:
                         if abort_event is not None and abort_event.is_set():
                             raise KeyboardInterrupt
@@ -272,6 +289,8 @@ def download_blob(
                         hasher.update(chunk)
                         chunk_len = len(chunk)
                         downloaded += chunk_len
+                        if bucket:
+                            bucket.consume(chunk_len)
                         if byte_progress is not None:
                             unsent += chunk_len
                             if unsent >= REDRAW_THRESHOLD_BYTES:
@@ -297,7 +316,7 @@ def download_blob(
         except BaseException as exc:
             if byte_progress is None:
                 clear_bar()
-            if _is_retryable(exc) and attempt < _MAX_RETRIES:
+            if _is_retryable(exc) and attempt < max_retries:
                 last_exc = exc
                 continue
             raise
@@ -308,7 +327,7 @@ def download_blob(
 
     # Should never reach here, but satisfy the type checker.
     raise RuntimeError(  # pragma: no cover
-        f"Download failed for '{digest}' after {_MAX_RETRIES} retries."
+        f"Download failed for '{digest}' after {max_retries} retries."
     )
 
 

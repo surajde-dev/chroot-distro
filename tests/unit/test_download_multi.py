@@ -364,6 +364,12 @@ class TestDownloadFile:
 
                     def read(self, n):
                         if self.bytes_read >= 1024 * 1024:
+                            chunk0_path = f"{dest}.chunk0.tmp"
+                            import time
+                            for _ in range(50):
+                                if os.path.isfile(chunk0_path) and os.path.getsize(chunk0_path) == 4 * 1024 * 1024:
+                                    break
+                                time.sleep(0.1)
                             raise ConnectionResetError("Connection reset by peer")
                         chunk = b"X" * min(n, 1024 * 1024 - self.bytes_read)
                         self.bytes_read += len(chunk)
@@ -382,6 +388,7 @@ class TestDownloadFile:
             mock.patch("chroot_distro.constants.layer_download_workers", return_value=4),
             mock.patch("chroot_distro.helpers.download._probe_server", return_value=probe_result),
             mock.patch("urllib.request.build_opener", return_value=mock_opener_first),
+            mock.patch("chroot_distro.helpers.download._interruptible_sleep"),
         ):
             with pytest.raises(Exception):
                 download_file("http://example.com/output.tar", dest)
@@ -411,6 +418,7 @@ class TestDownloadFile:
             mock.patch("chroot_distro.constants.layer_download_workers", return_value=4),
             mock.patch("chroot_distro.helpers.download._probe_server", return_value=probe_result),
             mock.patch("urllib.request.build_opener", return_value=mock_opener_second),
+            mock.patch("chroot_distro.helpers.download._interruptible_sleep"),
         ):
             download_file("http://example.com/output.tar", dest)
 
