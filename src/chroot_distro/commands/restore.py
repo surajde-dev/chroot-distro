@@ -13,6 +13,7 @@ import typing
 import chroot_distro.helpers.mount_manager as mount_manager
 from chroot_distro.commands.help import HELP_COMMANDS
 from chroot_distro.constants import CONTAINERS_DIR, PROGRAM_NAME
+from chroot_distro.helpers.tar_extract import _safe_resolve
 from chroot_distro.locking import (
     ContainerLock,
     container_lock_path,
@@ -31,7 +32,6 @@ from chroot_distro.paths import (
     container_manifest,
     container_rootfs,
 )
-from chroot_distro.helpers.tar_extract import _safe_resolve
 from chroot_distro.progress import (
     ByteCounter,
     clear_bar,
@@ -273,7 +273,7 @@ def command_restore(args) -> None:
     # success — so an archive that yields no rootfs leaves the target
     # untouched, and one that yields a broken rootfs is removed rather than
     # left rootfs-less. A member naming a different container is rejected.
-    restore_name = None
+    restore_name: str | None = None
     lock = None
     committed = False
     pending_manifest = None     # (bytes, mode) written only on success
@@ -284,6 +284,8 @@ def command_restore(args) -> None:
     deferred_dir_modes: list[tuple[str, int]] = []
 
     def _write_manifest(data: bytes, mode: int) -> None:
+        if restore_name is None:
+            return
         mpath = container_manifest(restore_name)
         try:
             os.makedirs(os.path.dirname(mpath), exist_ok=True)
@@ -291,10 +293,8 @@ def command_restore(args) -> None:
                 out.write(data)
         except OSError:
             return
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(mpath, mode)
-        except OSError:
-            pass
 
     try:
         if archive:
@@ -349,6 +349,8 @@ def command_restore(args) -> None:
                         f"Restore handles a single container at a time."
                     )
                     sys.exit(1)
+
+                assert restore_name is not None
 
                 # Non-rootfs members (only manifest.json in a real backup)
                 # are held back: the manifest is buffered and written only if
@@ -428,6 +430,7 @@ def command_restore(args) -> None:
 
                 elif member.islnk():
                     # We already resolved and checked link_src above.
+                    assert link_src is not None
                     parent = os.path.dirname(dest)
                     if parent:
                         os.makedirs(parent, exist_ok=True)
@@ -477,6 +480,7 @@ def command_restore(args) -> None:
             )
             sys.exit(1)
 
+        assert restore_name is not None
         rootfs_dir = container_rootfs(restore_name)
         if os.path.islink(rootfs_dir) or not os.path.isdir(rootfs_dir):
             # Content was written but it did not yield a real directory at the

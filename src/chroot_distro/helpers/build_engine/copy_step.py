@@ -33,8 +33,8 @@ from chroot_distro.helpers.docker import (
     pull_image,
 )
 from chroot_distro.helpers.layer_diff import write_files_layer
-from chroot_distro.message import log_info
 from chroot_distro.helpers.tar_extract import _safe_resolve
+from chroot_distro.message import log_info
 
 
 def do_copy(engine: typing.Any, instr: dict[str, typing.Any]) -> None:
@@ -547,10 +547,8 @@ def _materialise_files(rootfs_dir: str, file_map: dict[str, typing.Any]) -> None
         if parent is None:
             continue
         host = os.path.join(parent, parts[-1])
-        try:
+        with contextlib.suppress(OSError):
             os.makedirs(parent, exist_ok=True)
-        except OSError:
-            pass
         kind = entry["kind"]
         try:
             if kind == "dir":
