@@ -12,8 +12,8 @@ _ISOLATED_OPT = (
     "Enable Isolated Mode: fewer host bind mounts plus Linux namespace isolation "
     "(mount, PID, UTS, IPC via unshare/nsenter). On Termux, skip Android system, "
     "storage, and $PREFIX bindings unless requested with --shared-* or --bind. "
-    "On Linux, skip default /tmp and /tmp/.X11-unix unless --shared-tmp or "
-    "--shared-x11. Not a full container runtime (no network namespace).",
+    "On Linux, skip default /tmp and display sharing unless --shared-tmp or "
+    "--shared-display. Not a full container runtime (no network namespace).",
 )
 _MINIMAL_OPT = (
     "--minimal",
@@ -354,12 +354,12 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
                 ),
             ),
             (
-                "--shared-x11",
-                "Bind host X11 socket directory to /tmp/.X11-unix."
+                "--shared-display",
+                "Share X11, Wayland, sound (PulseAudio/PipeWire), and D-Bus with the container."
                 + (
-                    " Takes priority over Isolated Mode. Inherited by --shared-tmp. Already included in default mode."
+                    " Takes priority over Isolated Mode. Already included in default mode. --shared-x11 accepted as alias."
                     if IS_TERMUX
-                    else " On Linux, included by default unless --isolated; forwards DISPLAY, XAUTHORITY, and XDG_RUNTIME_DIR and bind-mounts the authority file when needed."
+                    else " On Linux, active by default unless --isolated. Forwards DISPLAY, XAUTHORITY, XDG_RUNTIME_DIR, WAYLAND_DISPLAY, PULSE_SERVER, and DBUS_SESSION_BUS_ADDRESS. --shared-x11 accepted as a backward-compatible alias."
                 ),
             ),
             (
@@ -535,12 +535,12 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
                 ),
             ),
             (
-                "--shared-x11",
-                "Bind host X11 socket directory to /tmp/.X11-unix."
+                "--shared-display",
+                "Share X11, Wayland, sound (PulseAudio/PipeWire), and D-Bus with the container."
                 + (
-                    " Takes priority over Isolated Mode. Inherited by --shared-tmp. Already included in default mode."
+                    " Takes priority over Isolated Mode. Already included in default mode. --shared-x11 accepted as alias."
                     if IS_TERMUX
-                    else " On Linux, included by default unless --isolated; forwards DISPLAY, XAUTHORITY, and XDG_RUNTIME_DIR and bind-mounts the authority file when needed."
+                    else " On Linux, active by default unless --isolated. Forwards DISPLAY, XAUTHORITY, XDG_RUNTIME_DIR, WAYLAND_DISPLAY, PULSE_SERVER, and DBUS_SESSION_BUS_ADDRESS. --shared-x11 accepted as a backward-compatible alias."
                 ),
             ),
             (

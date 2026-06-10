@@ -426,34 +426,79 @@ chroot-distro login ubuntu --get-chroot-cmd
 | Option | Description |
 |---|---|
 | `-u`, `--user USER` | Log in as USER (default: `root`). Accepts `name`, numeric `uid`, `name:group`, or `uid:gid`. |
-| `--isolated` | Reduce host exposure and enable namespace isolation (mount, PID, UTS, IPC via `unshare`/`nsenter`). On Termux: also skip Android system, storage, and `$PREFIX` binds unless you opt in with `--shared-*` or `--bind`. On Linux: skip default `/tmp` and `/tmp/.X11-unix` unless `--shared-tmp` or `--shared-x11`. Mutually exclusive with `--minimal`. |
+| `--isolated` | Reduce host exposure and enable namespace isolation (mount, PID, UTS, IPC via `unshare`/`nsenter`). On Termux: also skip Android system, storage, and `$PREFIX` binds unless you opt in with `--shared-*` or `--bind`. On Linux: skip default `/tmp` and display sharing unless `--shared-tmp` or `--shared-display`. Mutually exclusive with `--minimal`. |
 | `--minimal` | Bare minimum chroot: core pseudo-filesystems only (`/dev`, `/proc`, `/sys`, plus `/run`, `/dev/pts`, `/dev/shm` when present). Stripped guest environment. Mutually exclusive with `--isolated`. |
 | `--shared-home` | Bind the invoking user's host home into the guest home (or `/root` for root). On Termux, binds `TERMUX_HOME`. |
 | `--shared-tmp` | Bind host tmp (`/tmp` on Linux, `$PREFIX/tmp` on Termux) to `/tmp` in the guest. On Linux, included by default unless `--isolated`. |
-| `--shared-x11` | Bind the host X11 socket directory to `/tmp/.X11-unix` in the guest. On Linux, also forwards `DISPLAY`, `XAUTHORITY`, and `XDG_RUNTIME_DIR` from the invoking user's session and bind-mounts the authority file when needed. Included by default unless `--isolated`. On Termux, opt-in only (termux-x11 often works with `--shared-tmp` alone). |
+| `--shared-display` | Share the host display server (X11 and Wayland), audio (PulseAudio/PipeWire), and D-Bus session bus with the container. On Linux, active by default unless `--isolated` or `--minimal`. On Termux, opt-in only. `--shared-x11` is accepted as a backward-compatible alias. |
 | `-b`, `--bind SRC[:DST]` | Bind-mount a custom host path (repeatable). `DST` must be an absolute guest path. |
 | `--hostname STRING` | Hostname inside the container (default: `localhost`). |
 | `-w`, `--work-dir PATH` | Initial working directory (default: user's home). |
 | `-e`, `--env VAR=VALUE` | Set a guest environment variable (repeatable). |
 | `--get-chroot-cmd` | Print the fully assembled `env` + `chroot` command line and exit. |
 
-#### Host bindings (Linux, default mode)
+#### Display sharing
+On Linux, display sharing is active when use `--shared-display` on when `--isolated`
+is set. `--shared-x11` is accepted as a backward-compatible alias.
+> It work best on regular Linux and in Termux it doesn't have all the options
 
-Without `--isolated` or `--minimal`, host `/tmp` and `/tmp/.X11-unix`
-(when present) are bind-mounted into the guest. When X11 sharing is
-active, `DISPLAY`, `XAUTHORITY`, and `XDG_RUNTIME_DIR` are forwarded from
-the invoking user's desktop session; the X authority file is bind-mounted
-when it lives outside `/run` (which is already shared). Compositors such as
-niri with xwayland-satellite often authenticate X11 clients by Unix-socket
-UID instead of an on-disk cookie; with `--shared-x11`, chroot-distro aligns
-the guest user's UID to the invoking host user without bind-mounting home. If
-a cookie file exists but the guest cannot read it, the cookie is copied into
-`/var/tmp/.chroot-distro-xauthority` (requires `xauth` on the host). If that
-fails, use `--shared-home`, `xhost +SI:localuser:GUEST`, or a UID-matched
-user.
-Use `--isolated` to skip those defaults, or `--minimal` for only core
-pseudo-filesystems. Home is never bind-mounted unless you pass
-`--shared-home`.
+Display sharing forwards four subsystems from the invoking host session into
+the container:
+
+**X11**
+- `/tmp/.X11-unix` socket directory is bind-mounted into the guest.
+- `DISPLAY`, `XAUTHORITY`, and `XDG_RUNTIME_DIR` are forwarded.
+- The X authority file is bind-mounted when it lives outside `/run`.
+- Compositors such as niri with xwayland-satellite often authenticate X11
+  clients by Unix-socket UID. Chroot-distro aligns the guest user's UID to
+  the invoking host user when needed. If the guest cannot read the cookie
+  file, it is copied to `/var/tmp/.chroot-distro-xauthority` (requires
+  `xauth` on the host). If that fails, use `--shared-home`,
+  `xhost +SI:localuser:GUEST`, or a UID-matched user.
+
+**Wayland**
+- `WAYLAND_DISPLAY` is forwarded (fallback: `wayland-0` if socket exists).
+- `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, and `DESKTOP_SESSION` are
+  forwarded from the host session.
+- Host `/run` is bind-mounted with **rslave** propagation so new Wayland
+  compositor sockets created after mount are immediately visible inside the
+  container.
+
+**Sound (PulseAudio / PipeWire)**
+- `PULSE_SERVER` is forwarded (fallback: `unix:/run/user/<uid>/pulse/native`
+  if the PulseAudio socket exists).
+- PipeWire apps discover their socket automatically via `XDG_RUNTIME_DIR`;
+  no extra env var is needed.
+
+**D-Bus**
+- `DBUS_SESSION_BUS_ADDRESS` is forwarded (fallback:
+  `unix:path=/run/user/<uid>/bus` if the socket exists).
+
+Use `--isolated` to skip all display sharing, or `--minimal` for only core
+pseudo-filesystems. Home is never bind-mounted unless you pass `--shared-home`.
+
+#### GPU acceleration (auto-detected)
+
+Chroot-distro automatically enables hardware-accelerated GPU rendering at
+login if use **`--shared-display`**. (It doesn't work on Termux)
+
+**AMD and Intel** (open-source Mesa drivers)
+- Works out of the box. Host `/dev` (including `/dev/dri/` render nodes) is
+  bind-mounted into the container. Guest Mesa drivers access GPU hardware
+  directly — no extra configuration needed.
+
+**NVIDIA — native Linux** (proprietary driver)
+- Detection: `/dev/nvidia0` exists, or `libcuda*.so*` / `libnvidia*.so*`
+  found under `/usr/lib*/`.
+- Bind-mounts: `/dev/nvidia*` device nodes, `/dev/dri/card*` and
+  `/dev/dri/renderD*` DRM nodes, host NVIDIA `.so` libraries mapped to the
+  correct guest library directory (multi-arch aware), NVIDIA config and ICD
+  files (`/etc/`, EGL/Vulkan JSON descriptors, OpenCL ICD), and NVIDIA CLI
+  tools (`nvidia-smi`, etc.).
+- Environment variables set: `__NV_PRIME_RENDER_OFFLOAD=1`,
+  `__GLX_VENDOR_LIBRARY_NAME=nvidia`.
+- Guest `ldconfig` is run inside the chroot to refresh the shared library
+  cache after the new libraries are bind-mounted.
 
 #### Namespace isolation (`--isolated`)
 
@@ -505,15 +550,23 @@ entries win):
 
 1. Baseline: `PATH` (from `DEFAULT_PATH_ENV`), `MOZ_FAKE_NO_SANDBOX=1`,
    `PULSE_SERVER=127.0.0.1` (Termux only).
-2. Image-defined `Env` from `manifest.json`.
+2. Image-defined `Env` from `manifest.json` (display and GPU vars are blocked
+   here — they are always set by auto-detection).
 3. Android system vars (`ANDROID_*`, `BOOTCLASSPATH`, …), Termux only,
    when not `--isolated` and not `--minimal`.
 4. Your `--env VAR=VALUE` entries.
 5. `HOME`, `USER`, `TERM` (default `xterm-256color`), `COLORTERM`
    (when set on the host).
-6. On Linux (unless `--isolated` or `--minimal`): `DISPLAY`,
-   `XAUTHORITY`, and `XDG_RUNTIME_DIR` when X11 sharing is active
-   (default mode or `--shared-x11`). Your `--env` entries override these.
+6. On Linux (unless `--isolated` or `--minimal`): display and audio vars
+   when display sharing is active (default mode or explicit `--shared-display`):
+   `DISPLAY`, `XAUTHORITY`, `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`,
+   `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`,
+   `PULSE_SERVER`, `DBUS_SESSION_BUS_ADDRESS`. Your `--env` entries override
+   these.
+7. On Linux (unless `--minimal`): GPU env vars when NVIDIA is auto-detected:
+   native — `__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME`;
+   WSL2 — `GALLIUM_DRIVER`, `MESA_D3D12_DEFAULT_DEVICE_TYPE`,
+   `LIBGL_ALWAYS_SOFTWARE`. Your `--env` entries override these.
 
 On Termux (unless isolated or minimal), `$PREFIX/bin` is appended to
 `PATH`. A snippet at `/etc/profile.d/termux-profile.sh` re-applies
@@ -894,14 +947,6 @@ detected at login by reading ELF headers of common shell binaries. Cross-arch
 execution uses **QEMU user-mode** via `binfmt_misc` / QEMU user binaries
 installed on the host.
 
-### 3. GPU Acceleration
-
-Chroot-Distro automatically enables hardware-accelerated 3D rendering for various GPU vendors:
-
-- **AMD & Intel GPU support**: Works out of the box! Since the host's `/dev` directory (including `/dev/dri/` render nodes) is mounted into the container, standard open-source Mesa drivers inside the guest can directly access AMD and Intel graphics hardware.
-- **NVIDIA GPU support (Standard Linux hosts)**: Automatically scans the host system for NVIDIA hardware, resolves all required device nodes (`/dev/nvidia*`), EGL/Vulkan ICD configurations, dynamic libraries, and CLI tools (such as `nvidia-smi`), bind-mounting them directly inside the container and refreshing the guest's dynamic linker cache.
-- **WSL2 support**: Automatically detects WSL2 virtualized GPU environments, recursively bind-mounts the host's `/usr/lib/wsl` folder (bringing in both the library overlay and the 9p driver filesystem), maps the `/dev/dxg` device, configures the linker cache (`ldconfig`) to search `/usr/lib/wsl/lib`, and sets up the required environment variables (`GALLIUM_DRIVER=d3d12`, etc.) inside the container.
-
 ---
 
 ## Storage layout
@@ -936,6 +981,8 @@ paths on Linux are typically under `/root/.local/share/` and
 
 ## Environment variables
 
+### User-configurable variables
+
 | Variable | Effect |
 |---|---|
 | `TERMUX__PREFIX` | Override Termux prefix; drives `RUNTIME_DIR` on Termux. Default: `/data/data/com.termux/files/usr`. |
@@ -954,6 +1001,41 @@ paths on Linux are typically under `/root/.local/share/` and
 | `COLUMNS` | Fallback terminal width for `--help` rendering. |
 | `TERM`, `COLORTERM` | Inherited into the guest (always; even in `--minimal`). `TERM` defaults to `xterm-256color` when unset on the host. |
 
+### Auto-set guest environment variables
+
+These are set automatically by chroot-distro at login. They cannot be
+overridden from `manifest.json` image `Env`, but can be overridden with
+`--env`.
+
+**Display and audio (Linux, non-minimal, display sharing active):**
+
+| Variable | Source / Fallback |
+|---|---|
+| `DISPLAY` | Host `$DISPLAY`; fallback `:0` |
+| `XAUTHORITY` | Host `$XAUTHORITY`; fallback `~/.Xauthority`; fallback Xwayland auth file in `/run/user/<uid>/` |
+| `XDG_RUNTIME_DIR` | Host `$XDG_RUNTIME_DIR`; fallback `/run/user/<uid>` |
+| `WAYLAND_DISPLAY` | Host `$WAYLAND_DISPLAY`; fallback `wayland-0` if socket exists |
+| `XDG_SESSION_TYPE` | Host `$XDG_SESSION_TYPE` (no fallback) |
+| `XDG_CURRENT_DESKTOP` | Host `$XDG_CURRENT_DESKTOP` (no fallback) |
+| `DESKTOP_SESSION` | Host `$DESKTOP_SESSION` (no fallback) |
+| `PULSE_SERVER` | Host `$PULSE_SERVER`; fallback `unix:/run/user/<uid>/pulse/native` if socket exists |
+| `DBUS_SESSION_BUS_ADDRESS` | Host `$DBUS_SESSION_BUS_ADDRESS`; fallback `unix:path=/run/user/<uid>/bus` if socket exists |
+
+**GPU — NVIDIA native Linux (auto-detected, non-minimal):**
+
+| Variable | Value |
+|---|---|
+| `__NV_PRIME_RENDER_OFFLOAD` | `1` |
+| `__GLX_VENDOR_LIBRARY_NAME` | `nvidia` |
+
+**GPU — WSL2 with NVIDIA (auto-detected, non-minimal):**
+
+| Variable | Value |
+|---|---|
+| `GALLIUM_DRIVER` | `d3d12` |
+| `MESA_D3D12_DEFAULT_DEVICE_TYPE` | `GPU` |
+| `LIBGL_ALWAYS_SOFTWARE` | `0` |
+
 ---
 
 ## Shell completions
@@ -967,8 +1049,8 @@ Completion scripts for Bash, Zsh, and Fish live in
 
 They complete subcommands, global flags (`--no-elevate`, `--use-sudo`),
 and per-command options (including `login`/`run` flags such as
-`--shared-home`, `--get-chroot-cmd`, and Termux-only
-`--isolated` / `--minimal`).
+`--shared-home`, `--shared-display`, `--get-chroot-cmd`, `--isolated`,
+and `--minimal`).
 
 If your shell does not pick them up automatically, install them manually:
 
