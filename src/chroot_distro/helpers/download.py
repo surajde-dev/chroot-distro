@@ -60,6 +60,8 @@ def _is_retriable(exc: BaseException) -> bool:
     """Return True for transient server or connection failures."""
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code >= 500
+    if isinstance(exc, (FileNotFoundError, PermissionError)):
+        return False
     if isinstance(exc, _TRANSIENT_ERRORS):
         return True
     if isinstance(exc, urllib.error.URLError):

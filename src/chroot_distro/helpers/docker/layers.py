@@ -56,6 +56,8 @@ def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
         # Only retry on 5xx (server-side) errors; 4xx are permanent.
         return exc.code >= 500
+    if isinstance(exc, (FileNotFoundError, PermissionError)):
+        return False
     if isinstance(exc, _RETRYABLE):
         return True
     if isinstance(exc, urllib.error.URLError):
@@ -104,6 +106,7 @@ def download_blob(
     bucket = TokenBucket(rate) if rate > 0 else None
 
     dest = layer_cache_path(digest)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
     if os.path.isfile(dest):
         return dest
 
