@@ -517,6 +517,9 @@ def test_get_bindings_termux_dist_type():
         # Check that cache bindings are skipped
         assert "/data/data/com.termux/cache" not in srcs
 
+        # Check that host's /data is skipped
+        assert "/data" not in srcs
+
 
 def test_custom_bind_overrides_data_on_termux():
     """Custom --bind src:/data should override the system /data mount on Termux."""

@@ -397,7 +397,7 @@ def get_bindings(
 
     # 2. Android-specific bindings (system and storage)
     if IS_TERMUX and not isolated:
-        if os.path.isdir("/data"):
+        if dist_type != "termux" and os.path.isdir("/data"):
             binds.append(("/data", "/data"))
         if dist_type != "termux":
             for src, dst in system_bindings():

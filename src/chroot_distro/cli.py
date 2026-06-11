@@ -106,6 +106,10 @@ def main() -> None:
     Validates the runtime environment, parses arguments, and dispatches
     to the chosen command's handler.
     """
+    if IS_TERMUX:
+        os.environ.pop("LD_PRELOAD", None)
+        os.environ.pop("LD_LIBRARY_PATH", None)
+
     signal.signal(signal.SIGQUIT, _sigquit_to_keyboard_interrupt)
 
     if len(sys.argv) >= 2:

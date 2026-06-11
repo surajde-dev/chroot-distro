@@ -130,3 +130,20 @@ def test_main_version():
         assert exc_info.value.code == 0
         mock_print.assert_called_once()
         assert "chroot-distro" in mock_print.call_args[0][0]
+
+
+@patch("chroot_distro.cli.IS_TERMUX", True)
+def test_main_termux_clears_preload():
+    mock_list = MagicMock()
+    with (
+        patch("sys.argv", ["chroot-distro", "list"]),
+        patch("os.getuid", return_value=1000),
+        patch.dict("os.environ", {"LD_PRELOAD": "fake-preload", "LD_LIBRARY_PATH": "fake-libpath"}),
+        patch.dict("chroot_distro.cli._COMMAND_HANDLERS", {"list": mock_list}),
+    ):
+        import os
+        assert os.environ.get("LD_PRELOAD") == "fake-preload"
+        assert os.environ.get("LD_LIBRARY_PATH") == "fake-libpath"
+        main()
+        assert "LD_PRELOAD" not in os.environ
+        assert "LD_LIBRARY_PATH" not in os.environ
