@@ -1,10 +1,12 @@
 import os
+import stat
 from unittest.mock import MagicMock, patch
 
 from chroot_distro.helpers.rootfs import (
     host_nameservers,
     host_resolv_conf_path,
     register_android_ids,
+    write_hosts,
     write_resolv_conf,
 )
 
@@ -48,9 +50,11 @@ def test_write_resolv_conf_uses_host_nameservers(tmp_path):
     with patch("chroot_distro.helpers.rootfs.host_nameservers", return_value=["192.0.2.4", "192.0.2.5"]):
         write_resolv_conf(str(rootfs))
 
-    content = (etc / "resolv.conf").read_text()
+    resolv_file = etc / "resolv.conf"
+    content = resolv_file.read_text()
     assert content == "nameserver 192.0.2.4\nnameserver 192.0.2.5\n"
-    assert not (etc / "resolv.conf").is_symlink()
+    assert not resolv_file.is_symlink()
+    assert stat.S_IMODE(resolv_file.stat().st_mode) == 0o644
 
 
 def test_write_resolv_conf_falls_back_to_defaults(tmp_path):
@@ -61,9 +65,25 @@ def test_write_resolv_conf_falls_back_to_defaults(tmp_path):
     with patch("chroot_distro.helpers.rootfs.host_nameservers", return_value=[]):
         write_resolv_conf(str(rootfs))
 
-    content = (etc / "resolv.conf").read_text()
+    resolv_file = etc / "resolv.conf"
+    content = resolv_file.read_text()
     assert "nameserver 8.8.8.8" in content
     assert "nameserver 8.8.4.4" in content
+    assert stat.S_IMODE(resolv_file.stat().st_mode) == 0o644
+
+
+def test_write_hosts(tmp_path):
+    rootfs = tmp_path / "rootfs"
+    etc = rootfs / "etc"
+    etc.mkdir(parents=True)
+
+    write_hosts(str(rootfs))
+
+    hosts_file = etc / "hosts"
+    content = hosts_file.read_text()
+    assert "127.0.0.1" in content
+    assert "localhost" in content
+    assert stat.S_IMODE(hosts_file.stat().st_mode) == 0o644
 
 
 def test_register_android_ids_basic(tmp_path):

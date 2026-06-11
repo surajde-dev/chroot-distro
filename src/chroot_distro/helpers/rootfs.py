@@ -84,6 +84,8 @@ def write_resolv_conf(rootfs: str) -> None:
     with open(path, "w") as fh:
         for ns in servers:
             fh.write(f"nameserver {ns}\n")
+    with contextlib.suppress(OSError):
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
 
 def write_hosts(rootfs: str) -> None:
@@ -104,6 +106,8 @@ def write_hosts(rootfs: str) -> None:
             "ff02::2     ip6-allrouters\n"
             "ff02::3     ip6-allhosts\n"
         )
+    with contextlib.suppress(OSError):
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
 
 def register_android_ids(rootfs: str) -> None:
