@@ -336,6 +336,7 @@ def _command_login_inner(container_name: str, args) -> None:
         invoking_uid = resolve_invoking_uid()
         try:
             import pwd
+
             username = pwd.getpwuid(invoking_uid).pw_name
             primary_gid = pwd.getpwuid(invoking_uid).pw_gid
             groups = [str(g) for g in os.getgrouplist(username, primary_gid)]

@@ -22,6 +22,7 @@ def resolve_invoking_uid() -> int:
 
 class _EnvCache:
     """Module-level cache for invoking environment."""
+
     value: dict[str, str] | None = None
 
 
@@ -32,7 +33,7 @@ def _get_ppid(pid: int) -> int | None:
         rpar = stat.rfind(")")
         if rpar == -1:
             return None
-        fields = stat[rpar + 2:].split()
+        fields = stat[rpar + 2 :].split()
         return int(fields[1])
     except Exception:
         return None

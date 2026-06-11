@@ -50,9 +50,7 @@ def detect_nvidia_gpu() -> bool:
     # 2. WSL2 with NVIDIA
     if os.path.exists("/dev/dxg"):
         wsl_lib = "/usr/lib/wsl/lib"
-        if os.path.isdir(wsl_lib) and any(
-            f.startswith(("libcuda", "libnvidia")) for f in os.listdir(wsl_lib)
-        ):
+        if os.path.isdir(wsl_lib) and any(f.startswith(("libcuda", "libnvidia")) for f in os.listdir(wsl_lib)):
             log.debug("NVIDIA detected: /dev/dxg + WSL libs present")
             return True
 

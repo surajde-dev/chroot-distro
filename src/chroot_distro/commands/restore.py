@@ -189,10 +189,10 @@ def _safe_dest(container_name: str, dest: str, *, follow_final: bool = False) ->
     """
     root = container_dir(container_name)
     rel = os.path.relpath(dest, root)
-    if rel == os.curdir:            # dest is the container dir itself
+    if rel == os.curdir:  # dest is the container dir itself
         return root
     parts = rel.split(os.sep)
-    if os.pardir in parts:         # defensive: dest is always built under root
+    if os.pardir in parts:  # defensive: dest is always built under root
         return None
     if follow_final:
         return _safe_resolve(root, parts)
@@ -276,7 +276,7 @@ def command_restore(args) -> None:
     restore_name: str | None = None
     lock = None
     committed = False
-    pending_manifest = None     # (bytes, mode) written only on success
+    pending_manifest = None  # (bytes, mode) written only on success
     # Dirs whose archived mode lacks owner rwx: temporarily widened so we
     # can write into them, with the final chmod deferred until extraction
     # finishes. Applied in reverse insertion order so children are sealed
@@ -289,7 +289,7 @@ def command_restore(args) -> None:
         mpath = container_manifest(restore_name)
         try:
             os.makedirs(os.path.dirname(mpath), exist_ok=True)
-            with open(mpath, 'wb') as out:
+            with open(mpath, "wb") as out:
                 out.write(data)
         except OSError:
             return
@@ -359,7 +359,7 @@ def command_restore(args) -> None:
                 if not _is_rootfs_dest(restore_name, dest):
                     if member.isreg() and dest == container_manifest(restore_name):
                         fobj = tf.extractfile(member)
-                        data = b''
+                        data = b""
                         if fobj is not None:
                             try:
                                 data = fobj.read()
@@ -390,9 +390,7 @@ def command_restore(args) -> None:
                     # Clamp the read source inside the container too, so a
                     # linkname routed through a planted symlink can't copy
                     # a host file into the rootfs.
-                    link_src = _safe_dest(
-                        link_container, raw_src, follow_final=True
-                    )
+                    link_src = _safe_dest(link_container, raw_src, follow_final=True)
                     if link_src is None:
                         continue
                 elif not (member.isdir() or member.issym() or member.isreg()):

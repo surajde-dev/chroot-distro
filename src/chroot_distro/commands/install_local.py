@@ -134,9 +134,7 @@ def _oci_cache_layer(tf, member_map, digest):
         # Reject hardlinks and symlinks: Python's extractfile() follows them
         # within the archive, letting a crafted outer tar swap one image's
         # layer for another's without any digest check catching the swap.
-        raise RuntimeError(
-            f"OCI layer blob is not a regular file: {blob_path}"
-        )
+        raise RuntimeError(f"OCI layer blob is not a regular file: {blob_path}")
     fobj = tf.extractfile(member)
     if fobj is None:
         raise RuntimeError(f"OCI layer blob is not a regular file: {blob_path}")

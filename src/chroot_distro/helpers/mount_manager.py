@@ -4,9 +4,11 @@ import contextlib
 import logging
 import os
 import re
+import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from chroot_distro.constants import IS_TERMUX, TERMUX_PREFIX
 from chroot_distro.exceptions import MountError
 from chroot_distro.message import warn
 
@@ -14,6 +16,32 @@ if TYPE_CHECKING:
     from chroot_distro.helpers.namespace import NamespaceHolder
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_mount() -> str:
+    if IS_TERMUX:
+        termux_mount = os.path.join(TERMUX_PREFIX, "bin", "mount")
+        if os.path.isfile(termux_mount):
+            return termux_mount
+    resolved = shutil.which("mount")
+    if not resolved:
+        raise MountError(
+            "Required executable 'mount' not found on the system. Please install mount-utils or ensure it is in your PATH."
+        )
+    return resolved
+
+
+def _resolve_umount() -> str:
+    if IS_TERMUX:
+        termux_umount = os.path.join(TERMUX_PREFIX, "bin", "umount")
+        if os.path.isfile(termux_umount):
+            return termux_umount
+    resolved = shutil.which("umount")
+    if not resolved:
+        raise MountError(
+            "Required executable 'umount' not found on the system. Please install mount-utils or ensure it is in your PATH."
+        )
+    return resolved
 
 
 def decode_mount_path(path: str) -> str:
@@ -112,7 +140,7 @@ def safe_mount(
         return
 
     try:
-        cmd = ["mount", "--rbind" if recursive else "--bind", source_abs, target]
+        cmd = [_resolve_mount(), "--rbind" if recursive else "--bind", source_abs, target]
         result = _run_mount_cmd(cmd, holder)
         if result.returncode != 0:
             raise subprocess.CalledProcessError(
@@ -139,7 +167,7 @@ def make_rslave(target: str, holder: NamespaceHolder | None = None) -> bool:
     if not is_mounted(target_abs, holder=holder):
         return False
     try:
-        result = _run_mount_cmd(["mount", "--make-rslave", target_abs], holder)
+        result = _run_mount_cmd([_resolve_mount(), "--make-rslave", target_abs], holder)
         if result.returncode != 0:
             log.debug(
                 "make-rslave failed for %s: %s",
@@ -163,7 +191,7 @@ def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
         return
 
     try:
-        result = _run_mount_cmd(["umount", target], holder)
+        result = _run_mount_cmd([_resolve_umount(), target], holder)
         if result.returncode != 0:
             raise subprocess.CalledProcessError(
                 result.returncode,
@@ -175,7 +203,7 @@ def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
         stderr = (e.stderr or "").strip() if hasattr(e, "stderr") else ""
         warn(f"Standard umount failed for {target} ({stderr}). Trying lazy umount...")
         try:
-            result = _run_mount_cmd(["umount", "-l", target], holder)
+            result = _run_mount_cmd([_resolve_umount(), "-l", target], holder)
             if result.returncode != 0:
                 raise subprocess.CalledProcessError(
                     result.returncode,
@@ -253,7 +281,7 @@ def apply_special_mount(rootfs: str, sm, holder: NamespaceHolder | None = None) 
     if is_mounted(target, holder=holder):
         return True
 
-    cmd = ["mount", "-t", sm.fstype]
+    cmd = [_resolve_mount(), "-t", sm.fstype]
     if sm.options:
         cmd += ["-o", sm.options]
     cmd += [sm.source, target]

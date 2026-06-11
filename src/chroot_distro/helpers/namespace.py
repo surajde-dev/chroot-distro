@@ -55,7 +55,10 @@ def _resolve_unshare() -> str:
         termux_unshare = os.path.join(TERMUX_PREFIX, "bin", "unshare")
         if os.path.isfile(termux_unshare):
             return termux_unshare
-    return shutil.which("unshare") or "unshare"
+    resolved = shutil.which("unshare")
+    if not resolved:
+        raise NamespaceError("Required executable 'unshare' not found on the system. Please ensure it is in your PATH.")
+    return resolved
 
 
 def _resolve_nsenter() -> str:
@@ -63,7 +66,10 @@ def _resolve_nsenter() -> str:
         termux_nsenter = os.path.join(TERMUX_PREFIX, "bin", "nsenter")
         if os.path.isfile(termux_nsenter):
             return termux_nsenter
-    return shutil.which("nsenter") or "nsenter"
+    resolved = shutil.which("nsenter")
+    if not resolved:
+        raise NamespaceError("Required executable 'nsenter' not found on the system. Please ensure it is in your PATH.")
+    return resolved
 
 
 def _nsenter_supports_long_flags(nsenter: str) -> bool:

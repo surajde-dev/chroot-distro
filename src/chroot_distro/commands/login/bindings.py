@@ -480,12 +480,9 @@ def get_bindings(
             norm_dst = "/" + dst.strip("/")
 
             # Block overrides of critical pseudo-filesystem mounts
-            if norm_dst in _critical_guest_paths or any(
-                norm_dst.startswith(cp + "/") for cp in _critical_guest_paths
-            ):
+            if norm_dst in _critical_guest_paths or any(norm_dst.startswith(cp + "/") for cp in _critical_guest_paths):
                 log.warning(
-                    "Custom bind destination '%s' conflicts with critical "
-                    "system mount — ignoring. Cannot override %s.",
+                    "Custom bind destination '%s' conflicts with critical system mount — ignoring. Cannot override %s.",
                     dst,
                     norm_dst,
                 )
@@ -494,9 +491,9 @@ def get_bindings(
             # Remove any system bind with the same destination or nested under it (user override wins)
             prev_len = len(binds)
             binds = [
-                (s, d) for s, d in binds
-                if ("/" + d.strip("/")) != norm_dst
-                and not ("/" + d.strip("/")).startswith(norm_dst + "/")
+                (s, d)
+                for s, d in binds
+                if ("/" + d.strip("/")) != norm_dst and not ("/" + d.strip("/")).startswith(norm_dst + "/")
             ]
             if len(binds) < prev_len:
                 log.info(

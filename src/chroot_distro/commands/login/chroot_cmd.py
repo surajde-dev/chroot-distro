@@ -4,6 +4,7 @@ import shlex
 import shutil
 
 from chroot_distro.constants import IS_TERMUX, TERMUX_PREFIX
+from chroot_distro.exceptions import ChrootDistroError
 
 log = logging.getLogger(__name__)
 
@@ -45,11 +46,17 @@ def build_chroot_args(
     wrapper is skipped and the command is executed directly (with the
     working directory defaulting to ``/``).
     """
-    chroot_exe = shutil.which("chroot") or "chroot"
+    chroot_exe = None
     if IS_TERMUX:
         termux_chroot = os.path.join(TERMUX_PREFIX, "bin", "chroot")
         if os.path.isfile(termux_chroot):
             chroot_exe = termux_chroot
+    if not chroot_exe:
+        chroot_exe = shutil.which("chroot")
+    if not chroot_exe:
+        raise ChrootDistroError(
+            "Required executable 'chroot' not found on the system. Please ensure it is in your PATH."
+        )
 
     args = [chroot_exe]
 
