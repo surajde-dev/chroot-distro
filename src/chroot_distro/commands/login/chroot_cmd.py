@@ -8,21 +8,22 @@ from chroot_distro.constants import IS_TERMUX, TERMUX_PREFIX
 log = logging.getLogger(__name__)
 
 
-def _rootfs_has_shell(rootfs: str) -> bool:
-    """Check whether /bin/sh exists inside the container rootfs.
+def _find_rootfs_shell(rootfs: str) -> str | None:
+    """Find a usable shell inside the container rootfs, returning its guest path.
 
-    Follows one level of symlink so that e.g. /bin/sh -> /bin/dash
-    is detected correctly.
+    Follows one level of symlink to handle systems with symlinked/moved shells.
     """
-    sh_path = os.path.join(rootfs, "bin", "sh")
-    if os.path.isfile(sh_path):
-        return True
-    # /bin itself may be a symlink (e.g. /bin -> usr/bin on merged-usr distros)
-    try:
-        resolved = os.path.realpath(sh_path)
-        return os.path.isfile(resolved)
-    except OSError:
-        return False
+    for guest_path in ("/bin/sh", f"{TERMUX_PREFIX}/bin/sh", f"{TERMUX_PREFIX}/bin/bash"):
+        sh_path = os.path.join(rootfs, guest_path.lstrip("/"))
+        if os.path.isfile(sh_path):
+            return guest_path
+        try:
+            resolved = os.path.realpath(sh_path)
+            if os.path.isfile(resolved):
+                return guest_path
+        except OSError:
+            pass
+    return None
 
 
 def build_chroot_args(
@@ -71,7 +72,8 @@ def build_chroot_args(
     # 4. Inner command — optionally prefixed with a cd into workdir
     cmd = list(inner_cmd) if inner_cmd else []
     if workdir and workdir != "/":
-        if _rootfs_has_shell(rootfs):
+        shell_path = _find_rootfs_shell(rootfs)
+        if shell_path:
             # Wrap the inner command so 'cd' happens inside the chroot.
             # If the directory doesn't exist or is inaccessible, we fall back to /
             # to ensure the shell still starts successfully.
@@ -82,13 +84,13 @@ def build_chroot_args(
                 if cmd
                 else f"cd {quoted_workdir} 2>/dev/null || cd /"
             )
-            args.extend(["/bin/sh", "-c", wrapped])
+            args.extend([shell_path, "-c", wrapped])
         else:
-            # Distroless / rootless image without /bin/sh — cannot wrap
+            # Distroless / rootless image without a shell — cannot wrap
             # with a shell to change directory.  Run the command directly;
             # the working directory will default to /.
             log.debug(
-                "No /bin/sh in rootfs %s; skipping workdir cd to %s",
+                "No usable shell in rootfs %s; skipping workdir cd to %s",
                 rootfs,
                 workdir,
             )

@@ -317,7 +317,30 @@ def _command_login_inner(container_name: str, args) -> None:
             inner = [f"{TERMUX_PREFIX}/bin/login"]
             if login_cmd:
                 inner += ["-c", shlex.join(login_cmd)]
-        login_uid = login_gid = login_home = groups = None
+        # Resolve user/group from the owner of the Termux home directory inside the rootfs.
+        # This ensures we match the ownership of the files in the container (e.g., UID 1000
+        # on standard Linux, or the Termux app UID on Android), which is required because
+        # Termux executables are often restricted to 700 permissions.
+        termux_home_path = os.path.join(rootfs, TERMUX_HOME.lstrip("/"))
+        try:
+            st = os.stat(termux_home_path)
+            login_uid = str(st.st_uid)
+            login_gid = str(st.st_gid)
+        except OSError:
+            login_uid = str(resolve_invoking_uid())
+            login_gid = login_uid
+
+        login_home = TERMUX_HOME
+
+        # Resolve supplementary groups from the invoking user to ensure proper group permissions
+        invoking_uid = resolve_invoking_uid()
+        try:
+            import pwd
+            username = pwd.getpwuid(invoking_uid).pw_name
+            primary_gid = pwd.getpwuid(invoking_uid).pw_gid
+            groups = [str(g) for g in os.getgrouplist(username, primary_gid)]
+        except Exception:
+            groups = [login_gid, "3003", "9997"] if IS_TERMUX else [login_gid]
     else:
         user = _resolve_login_user(rootfs, container_name, login_user)
         login_user = user["name"]
