@@ -101,7 +101,7 @@ def _add_login_or_run_common(p):
     """Options shared by both `login` and `run`."""
     p.add_argument("-u", "--user", default="root")
     _iso = p.add_mutually_exclusive_group()
-    _iso.add_argument("--isolated", action="store_true")
+    _iso.add_argument("--isolated", "--isolate", dest="isolated", action="store_true")
     _iso.add_argument("--minimal", action="store_true")
     p.add_argument("--shared-home", dest="shared_home", action="store_true")
     p.add_argument("--shared-tmp", dest="shared_tmp", action="store_true")

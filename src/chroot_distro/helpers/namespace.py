@@ -27,6 +27,16 @@ _LONG_TO_SHORT = {
 ISOLATION_MODE_NAMESPACE = "namespace"
 ISOLATION_MODE_HOST = "host"
 
+# Android's toybox/toolbox `sleep` rejects the GNU coreutils `infinity`
+# keyword ("sleep: Not a number 'infinity'") and aborts immediately, which
+# tears down the namespace holder the moment it is created. Use a large
+# finite duration (~68 years) that both coreutils and toybox accept.
+HOLDER_SLEEP_SECONDS = "2147483647"
+# Historical sentinel; still recognised so holders created by older versions
+# that are kept alive across an upgrade continue to be detected.
+_LEGACY_HOLDER_SLEEP_ARG = "infinity"
+_HOLDER_SLEEP_ARGS = frozenset({HOLDER_SLEEP_SECONDS, _LEGACY_HOLDER_SLEEP_ARG})
+
 
 class NamespaceError(ChrootDistroError):
     """Raised when namespace setup or execution fails."""
@@ -224,7 +234,7 @@ def _is_sleep_infinity_holder(pid: int) -> bool:
             cmdline = fh.read().replace("\0", " ")
     except OSError:
         return False
-    return "infinity" in cmdline.split()
+    return bool(_HOLDER_SLEEP_ARGS.intersection(cmdline.split()))
 
 
 def _snapshot_sleep_infinity_pids() -> set[int]:
@@ -255,19 +265,50 @@ def _read_host_child_pids(pid: int) -> list[int]:
     return children
 
 
+def _descendant_sleep_holders(launcher_pid: int, max_depth: int = 4) -> list[int]:
+    """Return ``sleep infinity`` holders reachable from *launcher_pid*.
+
+    ``unshare --pid --fork`` re-parents the ``sleep`` process one or more
+    levels below the launched ``unshare``. Walk the process-tree descendants
+    (via ``/proc/<pid>/task/*/children``) breadth-first so the holder is
+    located deterministically from the process we started, instead of a
+    global ``/proc`` scan that collides with pre-existing/leaked holders.
+    """
+    found: list[int] = []
+    seen: set[int] = {launcher_pid}
+    frontier = [launcher_pid]
+    depth = 0
+    while frontier and depth <= max_depth:
+        next_frontier: list[int] = []
+        for pid in frontier:
+            if pid != launcher_pid and _is_sleep_infinity_holder(pid):
+                if pid not in found:
+                    found.append(pid)
+            for child_pid in _read_host_child_pids(pid):
+                if child_pid not in seen:
+                    seen.add(child_pid)
+                    next_frontier.append(child_pid)
+        frontier = next_frontier
+        depth += 1
+    return found
+
+
 def _pick_new_holder_pid(before: set[int], launcher_pid: int | None = None) -> int | None:
-    candidates: list[int] = []
+    # Prefer holders that are descendants of the process we launched. This is
+    # deterministic even when stale/leaked `sleep infinity` holders already
+    # exist on the host (which a global scan would confuse for the new one).
     if launcher_pid is not None:
         if launcher_pid not in before and _is_sleep_infinity_holder(launcher_pid):
-            candidates.append(launcher_pid)
-        for child_pid in _read_host_child_pids(launcher_pid):
-            if child_pid not in before and _is_sleep_infinity_holder(child_pid):
-                candidates.append(child_pid)
+            return launcher_pid
+        descendants = [pid for pid in _descendant_sleep_holders(launcher_pid) if pid not in before]
+        if descendants:
+            if len(descendants) == 1:
+                return descendants[0]
+            return min(descendants, key=lambda pid: os.stat(f"/proc/{pid}").st_mtime)
 
-    for pid in _snapshot_sleep_infinity_pids():
-        if pid not in before and pid not in candidates:
-            candidates.append(pid)
-
+    # Fall back to the global new-PID scan only when descendant walking found
+    # nothing (e.g. kernels that hide /proc/<pid>/children).
+    candidates = [pid for pid in _snapshot_sleep_infinity_pids() if pid not in before]
     if not candidates:
         return None
     if len(candidates) == 1:
@@ -327,7 +368,7 @@ def _holder_unshare_argv(unshare: str, flags: list[str]) -> list[str]:
     if "--pid" in flags and "--fork" not in flags and "-f" not in flags:
         argv.append("--fork")
     argv.extend(flags)
-    argv.extend(["sleep", "infinity"])
+    argv.extend(["sleep", HOLDER_SLEEP_SECONDS])
     return argv
 
 
@@ -343,23 +384,47 @@ def _create_holder(container_name: str, flags: list[str]) -> NamespaceHolder:
     proc = subprocess.Popen(
         unshare_argv,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         start_new_session=True,
     )
 
     success = False
     host_pid: int | None = None
+    launch_failed = False
     try:
-        for _ in range(100):
+        # Up to ~5s: the forked `sleep` grandchild can take a moment to appear
+        # under a busy /proc, especially on Android kernels.
+        for _ in range(250):
             host_pid = _pick_new_holder_pid(before_sleep, launcher_pid=proc.pid)
             if host_pid is not None:
                 break
             if proc.poll() is not None and proc.returncode not in (0, None):
+                launch_failed = True
                 break
             time.sleep(0.02)
 
         if host_pid is None:
-            raise NamespaceError("Failed to locate namespace holder process (sleep infinity) on the host.")
+            stderr_text = ""
+            with contextlib.suppress(Exception):
+                if proc.poll() is None:
+                    proc.kill()
+                _, err = proc.communicate(timeout=2)
+                if err:
+                    stderr_text = err.decode(errors="replace").strip()
+
+            detail = f": {stderr_text}" if stderr_text else ""
+            if launch_failed or stderr_text:
+                raise NamespaceError(
+                    "Failed to create the isolation namespace holder. "
+                    f"'unshare' exited with an error{detail}. "
+                    "Isolation requires root with CAP_SYS_ADMIN and kernel support "
+                    "for the mount/PID/UTS/IPC namespaces; some Android kernels "
+                    "restrict this. Run without --isolate, or check that "
+                    "'unshare --pid --mount --uts --ipc --fork sleep infinity' works."
+                )
+            raise NamespaceError(
+                "Failed to locate namespace holder process (sleep infinity) on the host."
+            )
 
         if _proc_comm(host_pid) != "sleep":
             raise NamespaceError(f"Namespace holder PID {host_pid} is not a sleep process.")
@@ -423,15 +488,22 @@ def release_holder(container_name: str) -> None:
 
 
 def make_mount_private(holder: NamespaceHolder) -> bool:
-    """Set mount propagation to rprivate inside the holder's mount namespace."""
-    try:
-        result = holder.run(["mount", "--make-rprivate", "/"], capture_output=True, text=True)
-    except OSError:
-        return False
-    if result.returncode != 0:
-        log.debug("mount --make-rprivate / failed: %s", (result.stderr or "").strip())
-        return False
-    return True
+    """Set mount propagation private inside the holder's mount namespace.
+
+    Many Android kernels reject the recursive ``--make-rprivate /`` variant
+    inside a mount namespace. Fall back to the non-recursive ``--make-private``
+    and then ``--make-rslave`` so isolation still degrades gracefully instead
+    of failing outright. Returns True if any variant succeeds.
+    """
+    for propagation in ("--make-rprivate", "--make-private", "--make-rslave"):
+        try:
+            result = holder.run(["mount", propagation, "/"], capture_output=True, text=True)
+        except OSError:
+            continue
+        if result.returncode == 0:
+            return True
+        log.debug("mount %s / failed: %s", propagation, (result.stderr or "").strip())
+    return False
 
 
 def check_isolation_conflicts(

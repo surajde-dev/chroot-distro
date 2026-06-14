@@ -14,13 +14,34 @@ def test_long_flags_to_nsenter_short():
 
 def test_holder_unshare_argv_adds_fork_with_pid():
     argv = ns._holder_unshare_argv("unshare", ["--pid", "--mount"])
-    assert argv == ["unshare", "--fork", "--pid", "--mount", "sleep", "infinity"]
+    assert argv == ["unshare", "--fork", "--pid", "--mount", "sleep", ns.HOLDER_SLEEP_SECONDS]
 
 
 def test_holder_unshare_argv_no_duplicate_fork():
     argv = ns._holder_unshare_argv("unshare", ["--fork", "--mount"])
     assert argv.count("--fork") == 1
-    assert argv[-2:] == ["sleep", "infinity"]
+    assert argv[-2:] == ["sleep", ns.HOLDER_SLEEP_SECONDS]
+
+
+def test_holder_uses_finite_sleep_not_infinity():
+    """Android toybox `sleep` rejects 'infinity'; the holder must use a
+    finite numeric duration."""
+    argv = ns._holder_unshare_argv("unshare", ["--mount"])
+    assert "infinity" not in argv
+    assert argv[-1].isdigit()
+
+
+def test_is_sleep_holder_matches_finite_and_legacy():
+    def check(arg: str) -> bool:
+        with (
+            patch.object(ns, "_proc_comm", return_value="sleep"),
+            patch("builtins.open", mock_open(read_data=f"sleep\x00{arg}\x00")),
+        ):
+            return ns._is_sleep_infinity_holder(1234)
+
+    assert check(ns.HOLDER_SLEEP_SECONDS) is True
+    assert check("infinity") is True
+    assert check("5") is False
 
 
 def test_pick_new_holder_pid():
@@ -33,10 +54,36 @@ def test_pick_new_holder_pid_from_launcher_child():
     before: set[int] = set()
     with (
         patch.object(ns, "_snapshot_sleep_infinity_pids", return_value=set()),
-        patch.object(ns, "_read_host_child_pids", return_value=[12345]),
+        patch.object(ns, "_read_host_child_pids", side_effect=lambda pid: [12345] if pid == 999 else []),
         patch.object(ns, "_is_sleep_infinity_holder", side_effect=lambda pid: pid == 12345),
     ):
         assert ns._pick_new_holder_pid(before, launcher_pid=999) == 12345
+
+
+def test_pick_new_holder_pid_grandchild_via_fork():
+    """unshare --pid --fork re-parents sleep one level below: 999 -> 500 -> 12345."""
+    before: set[int] = set()
+    tree = {999: [500], 500: [12345], 12345: []}
+    with (
+        patch.object(ns, "_snapshot_sleep_infinity_pids", return_value=set()),
+        patch.object(ns, "_read_host_child_pids", side_effect=lambda pid: tree.get(pid, [])),
+        patch.object(ns, "_is_sleep_infinity_holder", side_effect=lambda pid: pid == 12345),
+    ):
+        assert ns._pick_new_holder_pid(before, launcher_pid=999) == 12345
+
+
+def test_pick_new_holder_prefers_descendant_over_stale():
+    """Pre-existing/leaked sleep holders must not be chosen over the real
+    descendant of the launched unshare process."""
+    before = {111, 222}  # stale leaked holders captured in the snapshot
+    tree = {999: [777], 777: []}
+    with (
+        # Global scan would surface stale 111/222 plus the new 777.
+        patch.object(ns, "_snapshot_sleep_infinity_pids", return_value={111, 222, 777}),
+        patch.object(ns, "_read_host_child_pids", side_effect=lambda pid: tree.get(pid, [])),
+        patch.object(ns, "_is_sleep_infinity_holder", side_effect=lambda pid: pid in (111, 222, 777)),
+    ):
+        assert ns._pick_new_holder_pid(before, launcher_pid=999) == 777
 
 
 def test_long_flags_to_nsenter_long():
@@ -62,6 +109,30 @@ def test_probe_unshare_flags_fails_without_mount(mock_run):
     mock_run.return_value = MagicMock(returncode=1)
     with pytest.raises(ns.NamespaceError, match="Mount namespace"):
         ns.probe_unshare_flags()
+
+
+def test_make_mount_private_falls_back_when_rprivate_rejected():
+    """Android kernels reject --make-rprivate /; fall back to --make-private."""
+    holder = MagicMock()
+
+    def run(cmd, **kwargs):
+        propagation = cmd[1]
+        rc = 0 if propagation == "--make-private" else 1
+        return MagicMock(returncode=rc, stderr="Operation not permitted")
+
+    holder.run.side_effect = run
+    assert ns.make_mount_private(holder) is True
+    attempted = [call.args[0][1] for call in holder.run.call_args_list]
+    assert attempted[0] == "--make-rprivate"
+    assert "--make-private" in attempted
+
+
+def test_make_mount_private_returns_false_when_all_fail():
+    holder = MagicMock()
+    holder.run.return_value = MagicMock(returncode=1, stderr="Operation not permitted")
+    assert ns.make_mount_private(holder) is False
+    attempted = [call.args[0][1] for call in holder.run.call_args_list]
+    assert attempted == ["--make-rprivate", "--make-private", "--make-rslave"]
 
 
 def test_check_isolation_conflicts_namespace_mode_without_flag():

@@ -182,10 +182,24 @@ def make_rslave(target: str, holder: NamespaceHolder | None = None) -> bool:
     return True
 
 
+# Recursive bind targets (/dev, /run and friends) frequently report
+# "target is busy" on logout because nested submounts or short-lived handles
+# linger. This is benign: the lazy umount below always succeeds. Suppress the
+# alarming warning for these and clean up quietly.
+_RECURSIVE_BIND_BASENAMES = frozenset({"dev", "run", "proc", "sys"})
+
+
+def _is_recursive_bind_target(target: str) -> bool:
+    base = os.path.basename(os.path.realpath(target).rstrip(os.sep))
+    return base in _RECURSIVE_BIND_BASENAMES
+
+
 def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
     """Safely unmount a target path.
 
-    Falls back to lazy unmount if normal unmount fails.
+    Falls back to lazy unmount if normal unmount fails. For recursive bind
+    targets the "target is busy" fallback is expected, so it is logged at
+    debug level instead of warning the user.
     """
     if not is_mounted(target, holder=holder):
         return
@@ -201,7 +215,10 @@ def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
             )
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip() if hasattr(e, "stderr") else ""
-        warn(f"Standard umount failed for {target} ({stderr}). Trying lazy umount...")
+        if _is_recursive_bind_target(target):
+            log.debug("Standard umount failed for %s (%s); using lazy umount.", target, stderr)
+        else:
+            warn(f"Standard umount failed for {target} ({stderr}). Trying lazy umount...")
         try:
             result = _run_mount_cmd([_resolve_umount(), "-l", target], holder)
             if result.returncode != 0:

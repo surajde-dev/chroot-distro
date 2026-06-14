@@ -113,6 +113,50 @@ def test_build_chroot_args_distroless_no_shell(tmp_path):
     assert args[-2:] == ["/usr/local/bin/cloudflared", "--help"]
 
 
+def test_build_chroot_args_shell_symlink_escapes_rootfs(tmp_path):
+    """A /bin/sh symlink pointing outside the rootfs must not be used as the
+    workdir wrapper shell (e.g. bind-mounted host $PREFIX on Termux). The
+    command should then be run directly without a shell wrapper."""
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "bin").mkdir(parents=True)
+    outside = tmp_path / "host_usr" / "bin"
+    outside.mkdir(parents=True)
+    (outside / "sh").touch()
+    (outside / "sh").chmod(0o755)
+    # /bin/sh in the rootfs is a symlink to a file *outside* the rootfs tree.
+    os.symlink(str(outside / "sh"), rootfs / "bin" / "sh")
+
+    args = build_chroot_args(
+        rootfs=str(rootfs),
+        workdir="/home/nonroot",
+        inner_cmd=["/app", "--help"],
+    )
+    assert "/bin/sh" not in args
+    assert "-c" not in args
+    assert args[-2:] == ["/app", "--help"]
+
+
+def test_build_chroot_args_run_skips_workdir_wrapper(tmp_path):
+    """For `run` (is_run=True), a non-root workdir must NOT wrap the command in
+    a shell, even when a real /bin/sh exists in the rootfs (which on Termux can
+    be the host $PREFIX shell exposed via a bind-mounted /data)."""
+    rootfs = tmp_path / "rootfs"
+    (rootfs / "bin").mkdir(parents=True)
+    (rootfs / "bin" / "sh").touch()
+    (rootfs / "bin" / "sh").chmod(0o755)
+
+    args = build_chroot_args(
+        rootfs=str(rootfs),
+        workdir="/home/nonroot",
+        inner_cmd=["/usr/local/bin/cloudflared", "--help"],
+        is_run=True,
+    )
+
+    assert "/bin/sh" not in args
+    assert "-c" not in args
+    assert args[-2:] == ["/usr/local/bin/cloudflared", "--help"]
+
+
 def test_build_chroot_args_distroless_workdir_root(tmp_path):
     """Distroless images with workdir='/' should not attempt any wrapping."""
     rootfs = tmp_path / "rootfs"
@@ -188,6 +232,56 @@ def test_get_bindings_home_sharing():
         assert len(termux_binds) == 1
         data_binds = [(src, dst) for src, dst in binds if src == "/data" and dst.endswith("data")]
         assert len(data_binds) == 1
+
+
+def test_build_termux_env_scrubs_linker_preloads():
+    from chroot_distro.commands.login import _build_termux_env
+
+    env = _build_termux_env(
+        "/fake/rootfs",
+        ["LD_PRELOAD=/host/libtermux-exec.so", "LD_LIBRARY_PATH=/host/lib", "FOO=bar"],
+        minimal=False,
+    )
+    assert "LD_PRELOAD" not in env
+    assert "LD_LIBRARY_PATH" not in env
+    assert env["FOO"] == "bar"
+    assert env["ANDROID_DATA"] == "/data"
+    assert env["ANDROID_ROOT"] == "/system"
+    assert env["LANG"] == "en_US.UTF-8"
+
+
+def test_build_termux_env_minimal_still_scrubs_preloads():
+    from chroot_distro.commands.login import _build_termux_env
+
+    env = _build_termux_env(
+        "/fake/rootfs",
+        ["LD_PRELOAD=/host/libtermux-exec.so"],
+        minimal=True,
+    )
+    assert "LD_PRELOAD" not in env
+    # minimal mode does not inject the android entrypoint vars
+    assert "ANDROID_DATA" not in env
+
+
+def test_build_termux_env_never_sets_ld_preload_even_with_guest_shim(tmp_path):
+    """Even when a guest libtermux-exec shim exists in the rootfs, the chroot
+    must be entered WITHOUT LD_PRELOAD. A stale/host-prefixed preload
+    the guest linker cannot resolve triggers the "helper program for dynamic
+    executables" banner."""
+    from chroot_distro.commands.login import TERMUX_PREFIX, _build_termux_env
+
+    rootfs = tmp_path / "rootfs"
+    lib_dir = rootfs / TERMUX_PREFIX.lstrip("/") / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "libtermux-exec-ld-preload.so").touch()
+
+    env = _build_termux_env(
+        str(rootfs),
+        ["LD_PRELOAD=/host/libtermux-exec-ld-preload.so", "LD_LIBRARY_PATH=/host/lib"],
+        minimal=False,
+    )
+    assert "LD_PRELOAD" not in env
+    assert "LD_LIBRARY_PATH" not in env
 
 
 def test_resolve_host_home_uses_sudo_user_not_container_name():
@@ -455,7 +549,6 @@ def test_get_bindings_minimal_linux():
         assert "/sys" in srcs
 
 
-
 def test_get_bindings_shared_tmp_termux():
     from chroot_distro.commands.login.bindings import TERMUX_PREFIX, get_bindings
 
@@ -639,7 +732,10 @@ def test_custom_bind_removes_nested_system_binds_on_termux():
             "chroot_distro.commands.login.bindings.android_data_bindings",
             return_value=[
                 ("/data/dalvik-cache", "/data/dalvik-cache"),
-                ("/data/misc/apexdata/com.android.art/dalvik-cache", "/data/misc/apexdata/com.android.art/dalvik-cache"),
+                (
+                    "/data/misc/apexdata/com.android.art/dalvik-cache",
+                    "/data/misc/apexdata/com.android.art/dalvik-cache",
+                ),
             ],
         ),
         patch("chroot_distro.commands.login.bindings.TERMUX_PREFIX", "/data/data/com.termux/files/usr"),
@@ -726,7 +822,9 @@ def test_resolve_rootfs_path_symlinks(tmp_path):
 
 def test_resolve_rootfs_path_loop(tmp_path):
     import errno
+
     import pytest
+
     from chroot_distro.commands.login.passwd import resolve_rootfs_path
 
     rootfs = tmp_path / "rootfs"
@@ -739,6 +837,3 @@ def test_resolve_rootfs_path_loop(tmp_path):
     with pytest.raises(OSError) as excinfo:
         resolve_rootfs_path(str(rootfs), "/a")
     assert excinfo.value.errno == errno.ELOOP
-
-
-

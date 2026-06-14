@@ -180,6 +180,9 @@ def _build_termux_env(rootfs, extra_env, minimal):
         env["PATH"] = f"{TERMUX_PREFIX}/bin"
         env["PREFIX"] = TERMUX_PREFIX
         env["TMPDIR"] = f"{TERMUX_PREFIX}/tmp"
+        env["LANG"] = "en_US.UTF-8"
+        env["ANDROID_DATA"] = "/data"
+        env["ANDROID_ROOT"] = "/system"
     for entry in extra_env:
         key, _, val = entry.partition("=")
         if key:
@@ -189,6 +192,20 @@ def _build_termux_env(rootfs, extra_env, minimal):
     host_colorterm = os.environ.get("COLORTERM", "")
     if host_colorterm:
         env["COLORTERM"] = host_colorterm
+    # Never carry the *host* Termux dynamic-linker preloads into the guest:
+    # a stale host libtermux-exec / LD_LIBRARY_PATH points at host paths that
+    # do not exist inside the chroot, making the Termux linker emit
+    # "This is <prog>, the helper program for dynamic executables" instead
+    # of executing the binary.
+    env.pop("LD_LIBRARY_PATH", None)
+    # Never carry a libtermux-exec exec-shim into the guest via LD_PRELOAD.
+    # chroot with `env -i` and no
+    # preload, and the working manual recipe explicitly does `unset
+    # LD_PRELOAD`. A stale or host-prefixed LD_PRELOAD that the guest linker
+    # cannot resolve makes it print "This is <prog>, the helper program for
+    # dynamic executables" instead of running the binary. The guest's own
+    # $PREFIX/etc/profile (sourced via `login -l`) sets up the environment.
+    env.pop("LD_PRELOAD", None)
     return env
 
 
@@ -451,6 +468,17 @@ def _command_login_inner(container_name: str, args) -> None:
             _check_shell_available(rootfs, container_path, login_shell, container_name)
             inner = [login_shell, "-c", shlex.join(login_cmd)] if login_cmd else [login_shell, "-l"]
 
+    # Android paranoid-network: the kernel only allows socket() for processes
+    # that belong to AID_INET (3003) / AID_NET_RAW (3004). Without these in the
+    # guest's supplementary groups, DNS and all networking fail inside the
+    # chroot ("Temporary failure resolving"). Grant them on Termux unless the
+    # session is isolated or minimal.
+    if IS_TERMUX and not isolated and not minimal:
+        groups = list(groups)
+        for net_gid in ("3003", "3004"):
+            if net_gid not in groups:
+                groups.append(net_gid)
+
     if IS_TERMUX and not isolated and not minimal:
         termux_bin = f"{TERMUX_PREFIX}/bin"
         components = [c for c in child_env.get("PATH", "").split(":") if c and c != termux_bin]
@@ -653,6 +681,7 @@ def _command_login_inner(container_name: str, args) -> None:
         groups=groups,
         workdir=login_wd,
         inner_cmd=inner,
+        is_run=run_inner is not None,
     )
 
     exec_argv = chroot_args

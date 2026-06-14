@@ -49,3 +49,32 @@ def test_parser_login_isolated_minimal_exclusive():
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["login", "alpine", "--isolated", "--minimal"])
+
+
+def test_parser_login_isolate_alias():
+    parser = build_parser()
+    args = parser.parse_args(["login", "alpine", "--isolate"])
+    assert args.isolated is True
+    assert args.minimal is False
+
+
+def test_parser_run_isolate_alias():
+    parser = build_parser()
+    args = parser.parse_args(["run", "alpine", "--isolate"])
+    assert args.isolated is True
+
+
+def test_parser_run_captures_run_args():
+    parser = build_parser()
+    args, unknown = parse_cli_args(parser, ["run", "cloudflared", "--", "--help"])
+    assert args.command == "run"
+    assert args.container_name == "cloudflared"
+    assert args.run_args == ["--help"]
+    assert unknown == []
+
+
+def test_parser_run_captures_multiple_run_args():
+    parser = build_parser()
+    args, _ = parse_cli_args(parser, ["run", "alpine", "--isolate", "--", "tunnel", "run"])
+    assert args.isolated is True
+    assert args.run_args == ["tunnel", "run"]

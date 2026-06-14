@@ -12,18 +12,25 @@ log = logging.getLogger(__name__)
 def _find_rootfs_shell(rootfs: str) -> str | None:
     """Find a usable shell inside the container rootfs, returning its guest path.
 
-    Follows one level of symlink to handle systems with symlinked/moved shells.
+    Follows one level of symlink to handle systems with symlinked/moved shells,
+    but only accepts targets that resolve to a real file *inside* the rootfs.
+    A shell that is only visible because of a bind-mounted host ``$PREFIX``
+    (e.g. distroless / rootless images on Termux) is rejected, so the caller
+    falls back to running the command directly instead of exec'ing a host
+    binary that the chroot cannot resolve.
     """
+    rootfs_real = os.path.realpath(rootfs)
     for guest_path in ("/bin/sh", f"{TERMUX_PREFIX}/bin/sh", f"{TERMUX_PREFIX}/bin/bash"):
         sh_path = os.path.join(rootfs, guest_path.lstrip("/"))
-        if os.path.isfile(sh_path):
+        if os.path.isfile(sh_path) and not os.path.islink(sh_path):
             return guest_path
         try:
             resolved = os.path.realpath(sh_path)
-            if os.path.isfile(resolved):
-                return guest_path
         except OSError:
-            pass
+            continue
+        # Accept only when the symlink target stays within the rootfs tree.
+        if os.path.isfile(resolved) and os.path.commonpath([rootfs_real, resolved]) == rootfs_real:
+            return guest_path
     return None
 
 
@@ -34,6 +41,7 @@ def build_chroot_args(
     groups: list[str] | None = None,
     workdir: str = "",
     inner_cmd: list[str] | None = None,
+    is_run: bool = False,
 ) -> list[str]:
     """Build the command line arguments for the GNU chroot command.
 
@@ -76,9 +84,16 @@ def build_chroot_args(
     # 3. Rootfs target directory
     args.append(rootfs)
 
-    # 4. Inner command — optionally prefixed with a cd into workdir
+    # 4. Inner command — optionally prefixed with a cd into workdir.
+    #
+    # For `run` (executing an image's Entrypoint/Cmd), the command is run
+    # directly and must never be wrapped in a shell: rootless/distroless
+    # images have no usable in-rootfs shell, and on Termux the host
+    # $PREFIX/bin/sh is visible inside the rootfs via the bind-mounted
+    # /data, which would make chroot try to exec a shell that the chroot
+    # cannot resolve ('.../sh: No such file or directory').
     cmd = list(inner_cmd) if inner_cmd else []
-    if workdir and workdir != "/":
+    if workdir and workdir != "/" and not is_run:
         shell_path = _find_rootfs_shell(rootfs)
         if shell_path:
             # Wrap the inner command so 'cd' happens inside the chroot.
