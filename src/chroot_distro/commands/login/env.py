@@ -115,8 +115,17 @@ def inject_termux_profile(
     *,
     owner_uid: int | None = None,
     owner_gid: int | None = None,
+    include_termux_bin: bool = False,
 ) -> None:
-    """Write a profile.d snippet that re-applies the login-time environment."""
+    """Write a profile.d snippet that re-applies the login-time environment.
+
+    When *include_termux_bin* is True the snippet also appends the host Termux
+    ``$PREFIX/bin`` to PATH. This is only appropriate for ``termux``-type
+    containers that genuinely run the host $PREFIX; for normal distros (Fedora,
+    Ubuntu, ...) adding it makes the guest shell resolve commands like ``clear``
+    to host Termux binaries that cannot execute inside the chroot, so it must
+    stay False.
+    """
     profile_d = os.path.join(rootfs, "etc", "profile.d")
     if not os.path.isdir(profile_d):
         return
@@ -128,12 +137,14 @@ def inject_termux_profile(
             os.remove(ls)
     termux_bin = f"{TERMUX_PREFIX}/bin"
 
-    lines = [
-        'case ":${PATH}:" in',
-        f'  *":{termux_bin}:"*) ;;',
-        f'  *) export PATH="${{PATH}}:{termux_bin}" ;;',
-        "esac",
-    ]
+    lines: list[str] = []
+    if include_termux_bin:
+        lines += [
+            'case ":${PATH}:" in',
+            f'  *":{termux_bin}:"*) ;;',
+            f'  *) export PATH="${{PATH}}:{termux_bin}" ;;',
+            "esac",
+        ]
 
     for key in sorted(env):
         if key in _PROFILE_INJECT_SKIP or is_sensitive_env_key(key):

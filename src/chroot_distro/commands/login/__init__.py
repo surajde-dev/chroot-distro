@@ -1,5 +1,6 @@
 import contextlib
 import json
+import logging
 import os
 import shlex
 import subprocess
@@ -54,6 +55,20 @@ from chroot_distro.locking import ContainerLock
 from chroot_distro.message import crit_error, warn
 from chroot_distro.names import require_valid_name
 from chroot_distro.paths import container_dir, container_rootfs
+
+log = logging.getLogger(__name__)
+
+
+def _rootfs_has_script(rootfs: str) -> bool:
+    """Return True if util-linux `script` is available inside the rootfs."""
+    for guest_bin in ("/usr/bin/script", "/bin/script"):
+        host_path = os.path.join(rootfs, guest_bin.lstrip("/"))
+        try:
+            if os.path.isfile(host_path) or (os.path.islink(host_path) and os.path.exists(host_path)):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def command_login(args) -> None:
@@ -482,7 +497,6 @@ def _command_login_inner(container_name: str, args) -> None:
     if IS_TERMUX and not isolated and not minimal:
         termux_bin = f"{TERMUX_PREFIX}/bin"
         components = [c for c in child_env.get("PATH", "").split(":") if c and c != termux_bin]
-        components.append(termux_bin)
         child_env["PATH"] = ":".join(components)
 
     if dist_type == "normal" and IS_TERMUX and not isolated and not minimal:
@@ -598,7 +612,11 @@ def _command_login_inner(container_name: str, args) -> None:
                     holder = namespace.acquire_holder(container_name)
                     namespace.write_isolation_mode(container_name, namespace.ISOLATION_MODE_NAMESPACE)
                     if not namespace.make_mount_private(holder):
-                        warn("Failed to set mount propagation to rprivate in isolated namespace.")
+                        # Many Android kernels already provide an isolated
+                        # propagation in the new mount namespace, so failing to
+                        # set it explicitly is benign. Keep it out of the
+                        # user-facing output to avoid alarming warnings.
+                        log.debug("Could not set mount propagation to private in isolated namespace.")
                 except NamespaceError as exc:
                     session.decrement(container_name, lock_fh=lock_fh)
                     crit_error(str(exc))
@@ -652,6 +670,10 @@ def _command_login_inner(container_name: str, args) -> None:
                 )
                 for sm in specials:
                     mount_manager.apply_special_mount(rootfs, sm, holder=holder)
+                # On Termux the devpts above is a fresh newinstance; point
+                # /dev/ptmx at it so pty allocation uses the new instance.
+                if IS_TERMUX:
+                    mount_manager.bind_ptmx_to_pts(rootfs, holder=holder)
             except Exception as e:
                 mount_manager.unmount_all(rootfs, holder=holder)
                 if holder is not None:
@@ -673,6 +695,26 @@ def _command_login_inner(container_name: str, args) -> None:
                     f"Run '{PROGRAM_NAME} unmount {container_name}' and try again."
                 )
                 sys.exit(1)
+
+    # On Termux, Android's /dev/pts nodes use device major 88 while live ptys
+    # use major 136, so the inherited login pty has no matching /dev/pts entry
+    # and glibc ttyname() fails. Running the interactive shell under util-linux
+    # `script` allocates a fresh pty from the newinstance devpts as the child's
+    # controlling terminal, which has a matching node -> ttyname() succeeds.
+    # Only wrap genuine interactive logins (not `run`, not explicit -c).
+    if IS_TERMUX and run_inner is None and not login_cmd and not minimal:
+        if _rootfs_has_script(rootfs):
+            # script(1) forks the command onto a freshly allocated pty (from the
+            # chroot's newinstance devpts via /dev/ptmx) as its controlling
+            # terminal, so ttyname()/isatty() succeed. Explicit flags are more
+            # portable than the bundled "-qec" form across util-linux versions.
+            inner = ["script", "-q", "-e", "-c", shlex.join(inner), "/dev/null"]
+        else:
+            log.debug(
+                "`script` not found in rootfs %s; skipping pty wrapper. "
+                "ttyname() may fail on Android (major 88 vs 136 devpts).",
+                rootfs,
+            )
 
     chroot_args = build_chroot_args(
         rootfs=rootfs,

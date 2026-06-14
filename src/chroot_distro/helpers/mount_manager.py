@@ -154,6 +154,40 @@ def safe_mount(
         raise MountError(f"Failed to mount {source} to {target}: {stderr}") from e
 
 
+def bind_ptmx_to_pts(rootfs: str, holder: NamespaceHolder | None = None) -> bool:
+    """Point <rootfs>/dev/ptmx at the freshly mounted devpts instance.
+
+    After a `newinstance` devpts is mounted at <rootfs>/dev/pts, programs that
+    open /dev/ptmx must reach *that* instance's multiplexer to allocate a pty
+    whose slave appears in <rootfs>/dev/pts (with the correct device major).
+    Bind <rootfs>/dev/pts/ptmx over <rootfs>/dev/ptmx to achieve this.
+
+    Returns True on success, False on failure (non-fatal).
+    """
+    pts_ptmx = os.path.join(rootfs, "dev", "pts", "ptmx")
+    dev_ptmx = os.path.join(rootfs, "dev", "ptmx")
+    if not os.path.exists(pts_ptmx):
+        log.debug("bind_ptmx_to_pts: %s does not exist", pts_ptmx)
+        return False
+    try:
+        # /dev/ptmx may be a symlink (-> pts/ptmx) or a real node; ensure a
+        # plain file/node target exists for the bind mount.
+        if os.path.islink(dev_ptmx):
+            with contextlib.suppress(OSError):
+                os.remove(dev_ptmx)
+        if not os.path.exists(dev_ptmx):
+            with contextlib.suppress(OSError):
+                open(dev_ptmx, "a").close()
+        result = _run_mount_cmd([_resolve_mount(), "--bind", pts_ptmx, dev_ptmx], holder)
+        if result.returncode != 0:
+            log.debug("bind_ptmx_to_pts failed: %s", (result.stderr or "").strip())
+            return False
+    except Exception:
+        log.debug("bind_ptmx_to_pts exception", exc_info=True)
+        return False
+    return True
+
+
 def make_rslave(target: str, holder: NamespaceHolder | None = None) -> bool:
     """Set recursive slave mount propagation on *target*.
 
@@ -186,7 +220,23 @@ def make_rslave(target: str, holder: NamespaceHolder | None = None) -> bool:
 # "target is busy" on logout because nested submounts or short-lived handles
 # linger. This is benign: the lazy umount below always succeeds. Suppress the
 # alarming warning for these and clean up quietly.
-_RECURSIVE_BIND_BASENAMES = frozenset({"dev", "run", "proc", "sys"})
+_RECURSIVE_BIND_BASENAMES = frozenset(
+    {
+        "dev",
+        "run",
+        "proc",
+        "sys",
+        # Android system trees come in as nested binds; unmount them as a
+        # subtree to avoid per-submount EINVAL ("Invalid argument").
+        "system",
+        "system_ext",
+        "vendor",
+        "product",
+        "odm",
+        "apex",
+        "data",
+    }
+)
 
 
 def _is_recursive_bind_target(target: str) -> bool:
@@ -194,18 +244,28 @@ def _is_recursive_bind_target(target: str) -> bool:
     return base in _RECURSIVE_BIND_BASENAMES
 
 
-def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
+def safe_unmount(target: str, holder: NamespaceHolder | None = None, recursive: bool = False) -> None:
     """Safely unmount a target path.
 
     Falls back to lazy unmount if normal unmount fails. For recursive bind
-    targets the "target is busy" fallback is expected, so it is logged at
-    debug level instead of warning the user.
+    targets a "target is busy" or "Invalid argument" (EINVAL) failure is
+    expected (host-owned submounts such as /run/user/<uid>, or nested Android
+    binds like /system/product), so it is logged at debug level instead of
+    warning the user, and we go straight to a lazy/recursive unmount.
+
+    When *recursive* is True the whole subtree is detached in one go
+    (``umount -R``) which is the correct way to tear down an ``--rbind`` mount
+    without walking into submounts the host still holds open.
     """
     if not is_mounted(target, holder=holder):
         return
 
+    umount = _resolve_umount()
+    base_cmd = [umount, "-R", target] if recursive else [umount, target]
+    quiet = recursive or _is_recursive_bind_target(target)
+
     try:
-        result = _run_mount_cmd([_resolve_umount(), target], holder)
+        result = _run_mount_cmd(base_cmd, holder)
         if result.returncode != 0:
             raise subprocess.CalledProcessError(
                 result.returncode,
@@ -215,12 +275,13 @@ def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
             )
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip() if hasattr(e, "stderr") else ""
-        if _is_recursive_bind_target(target):
+        if quiet:
             log.debug("Standard umount failed for %s (%s); using lazy umount.", target, stderr)
         else:
             warn(f"Standard umount failed for {target} ({stderr}). Trying lazy umount...")
+        lazy_cmd = [umount, "-R", "-l", target] if recursive else [umount, "-l", target]
         try:
-            result = _run_mount_cmd([_resolve_umount(), "-l", target], holder)
+            result = _run_mount_cmd(lazy_cmd, holder)
             if result.returncode != 0:
                 raise subprocess.CalledProcessError(
                     result.returncode,
@@ -230,13 +291,49 @@ def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
                 )
         except subprocess.CalledProcessError as e_lazy:
             lazy_stderr = (e_lazy.stderr or "").strip() if hasattr(e_lazy, "stderr") else ""
+            # A target that is no longer a mountpoint (already gone via a parent
+            # recursive unmount) is success, not failure.
+            if not is_mounted(target, holder=holder):
+                log.debug("%s already unmounted after recursive teardown.", target)
+                return
             raise MountError(f"Failed to unmount {target} (lazy umount also failed): {lazy_stderr}") from e_lazy
 
 
 def unmount_all(rootfs: str, holder: NamespaceHolder | None = None) -> None:
-    """Unmount all active mount points nested under rootfs in correct order."""
+    """Unmount all active mount points nested under rootfs in correct order.
+
+    Recursive-bind roots (``/run``, ``/dev``, ``/system`` and friends) are
+    detached as a whole subtree with ``umount -R`` so we never walk into
+    host-owned submounts (e.g. ``/run/user/<uid>``) or nested Android binds
+    (e.g. ``/system/product``) that report "busy" / "Invalid argument" when
+    unmounted individually. Submounts already covered by such a recursive
+    unmount are skipped.
+    """
+    rootfs_abs = os.path.realpath(rootfs)
     mounts = get_active_mounts(rootfs, holder=holder)
+
+    # A recursive-bind root is a mount exactly one level under rootfs whose
+    # name is a known recursive-bind basename (e.g. <rootfs>/run, <rootfs>/dev,
+    # <rootfs>/system). Its children (e.g. <rootfs>/run/user/1000) must NOT be
+    # treated as roots; they are torn down by the parent's recursive umount.
+    recursive_roots: list[str] = []
     for m in mounts:
+        rel = os.path.relpath(m, rootfs_abs)
+        if rel == os.curdir or os.sep in rel:
+            continue  # rootfs itself, or a nested submount — not a top-level root
+        if rel in _RECURSIVE_BIND_BASENAMES:
+            recursive_roots.append(m)
+
+    # Detach recursive subtrees first so their submounts vanish in one go.
+    for root in recursive_roots:
+        safe_unmount(root, holder=holder, recursive=True)
+
+    # Then unmount everything that still remains (deepest-first ordering is
+    # preserved from get_active_mounts), skipping anything already gone via a
+    # recursive teardown above.
+    for m in mounts:
+        if any(m == root or m.startswith(root + os.sep) for root in recursive_roots):
+            continue
         safe_unmount(m, holder=holder)
 
 
