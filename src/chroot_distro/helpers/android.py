@@ -218,4 +218,3 @@ def configure_android_rootfs(rootfs: str) -> None:
                         pass
         except OSError:
             pass
-

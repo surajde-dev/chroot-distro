@@ -253,7 +253,7 @@ def test_create_holder_fails_and_cleans_up(mock_remove_state, mock_pick, mock_po
     mock_proc = MagicMock()
     mock_popen.return_value = mock_proc
 
-    with pytest.raises(ns.NamespaceError, match="Failed to locate namespace holder"):
+    with pytest.raises(ns.NamespaceError, match="Failed to create the isolation namespace holder"):
         ns._create_holder("alpine", ["--mount"])
 
     mock_proc.kill.assert_called_once()

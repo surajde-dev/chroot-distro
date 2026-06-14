@@ -414,8 +414,6 @@ def get_bindings(
         # PipeWire, PulseAudio, D-Bus) created after mount are visible.
         rslave_targets.append(os.path.join(rootfs, "run"))
 
-
-
     # If minimal mode is enabled, we only bind the bare systems (/dev, /proc, /sys, /run)
     if minimal:
         return (

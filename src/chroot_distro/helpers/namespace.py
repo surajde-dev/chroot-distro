@@ -281,9 +281,8 @@ def _descendant_sleep_holders(launcher_pid: int, max_depth: int = 4) -> list[int
     while frontier and depth <= max_depth:
         next_frontier: list[int] = []
         for pid in frontier:
-            if pid != launcher_pid and _is_sleep_infinity_holder(pid):
-                if pid not in found:
-                    found.append(pid)
+            if pid != launcher_pid and _is_sleep_infinity_holder(pid) and pid not in found:
+                found.append(pid)
             for child_pid in _read_host_child_pids(pid):
                 if child_pid not in seen:
                     seen.add(child_pid)

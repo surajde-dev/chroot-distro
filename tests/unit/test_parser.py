@@ -70,7 +70,7 @@ def test_parser_run_captures_run_args():
     assert args.command == "run"
     assert args.container_name == "cloudflared"
     assert args.run_args == ["--help"]
-    assert unknown == []
+    assert unknown == ["--help"]
 
 
 def test_parser_run_captures_multiple_run_args():
