@@ -203,14 +203,7 @@ def get_special_mounts(
     # ptys as its controlling terminal. /dev/ptmx is pointed at this instance
     # in login via bind_ptmx_to_pts().
     #
-    # Regular Linux: bind-mounting the host /dev/pts (and especially the host
-    # /dev/ptmx) into the chroot breaks pty allocation on modern systemd hosts
-    # where /dev/ptmx is a real node bound to the host devpts via ptmxmode, and
-    # leaks devpts state that exhausts the host pty pool. Instead mount a fresh
-    # private `newinstance` devpts here and point /dev/ptmx at it (via
-    # bind_ptmx_to_pts in login), exactly as on Termux. The chroot then owns a
-    # self-contained pty multiplexer that allocates working ptys and tears down
-    # cleanly on logout without touching the host pty pool.
+    # Devpts overmount to isolate chroot login session PTYs.
     specials.append(
         SpecialMount(
             fstype="devpts",
@@ -381,14 +374,13 @@ def get_bindings(
         binds.append(("/proc", "/proc"))
     binds.append(("/sys", "/sys"))
 
-    # We never bind the host /dev/pts or host /dev/ptmx into the chroot. A fresh
-    # private `newinstance` devpts is mounted in get_special_mounts() and
-    # /dev/ptmx is pointed at it after mounting (bind_ptmx_to_pts in login).
-    #
-    # On Termux this avoids the ttyname() failure caused by the major 88 vs 136
-    # mismatch on Android. On regular Linux this avoids breaking pty allocation
-    # on systemd hosts (where /dev/ptmx is a real node tied to the host devpts)
-    # and prevents leaking devpts state that exhausts the host pty pool.
+    # Check if host /dev/pts and /dev/shm exist and mount them. We bind the
+    # host /dev/pts (matching pre-v2.1.2 behaviour) but never the host
+    # /dev/ptmx: binding the host /dev/ptmx leaked devpts state and exhausted
+    # the host pty pool. The newinstance devpts overmount in
+    # get_special_mounts() provides the chroot's pty nodes.
+    if os.path.exists("/dev/pts"):
+        binds.append(("/dev/pts", "/dev/pts"))
     if os.path.exists("/dev/shm"):
         binds.append(("/dev/shm", "/dev/shm"))
 
