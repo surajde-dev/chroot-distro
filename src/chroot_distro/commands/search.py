@@ -73,17 +73,14 @@ def command_search(args) -> None:
     stars_w = max(len("STARS"), *(len(r[1]) for r in rows))
     off_w = max(len("OFFICIAL"), *(len(r[2]) for r in rows))
 
-    header = (
-        f"  {C['BCYAN']}{'NAME':<{name_w}}  {'STARS':>{stars_w}}  "
-        f"{'OFFICIAL':<{off_w}}  {'DESCRIPTION'}{C['RST']}"
-    )
+    header = f"  {C['BCYAN']}{'NAME':<{name_w}}  {'STARS':>{stars_w}}  {'OFFICIAL':<{off_w}}  {'DESCRIPTION'}{C['RST']}"
     msg(header)
-    for name, stars, official, desc in rows:
+    for row_name, row_stars, row_official, row_desc in rows:
         msg(
-            f"  {C['GREEN']}{name:<{name_w}}{C['RST']}  "
-            f"{C['CYAN']}{stars:>{stars_w}}{C['RST']}  "
-            f"{C['YELLOW']}{official:<{off_w}}{C['RST']}  "
-            f"{desc}"
+            f"  {C['GREEN']}{row_name:<{name_w}}{C['RST']}  "
+            f"{C['CYAN']}{row_stars:>{stars_w}}{C['RST']}  "
+            f"{C['YELLOW']}{row_official:<{off_w}}{C['RST']}  "
+            f"{row_desc}"
         )
     msg()
     msg(f"{C['CYAN']}Install one with: {C['GREEN']}{PROGRAM_NAME} install <name>{C['RST']}")

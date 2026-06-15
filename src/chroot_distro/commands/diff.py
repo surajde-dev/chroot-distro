@@ -26,8 +26,7 @@ def _load_layer_digests(manifest_path: str) -> list[str]:
         data = json.load(fh)
     manifest = data.get("manifest") or {}
     layers = manifest.get("layers") or []
-    digests = [layer.get("digest", "") for layer in layers if layer.get("digest")]
-    return digests
+    return [layer.get("digest", "") for layer in layers if layer.get("digest")]
 
 
 def command_diff(args) -> None:

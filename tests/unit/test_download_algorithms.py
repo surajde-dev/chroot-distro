@@ -1,16 +1,16 @@
 import os
 import threading
 import time
-from unittest import mock
 import urllib.error
+from unittest import mock
 
 import pytest
 
 from chroot_distro.constants import download_max_retries, download_rate_limit
 from chroot_distro.helpers.download import (
-    _Segment,
     _download_segment,
     _is_retriable,
+    _Segment,
 )
 from chroot_distro.progress import AggregateByteProgress
 from chroot_distro.rate_limit import TokenBucket
@@ -145,14 +145,17 @@ class TestSegmentReconnection:
                 if calls == 1:
                     # First connection reads 5 bytes, then drops
                     assert range_header == "bytes=0-9"
+
                     class BrokenStream:
                         def __init__(self):
                             self.called = False
+
                         def read(self, size):
                             if not self.called:
                                 self.called = True
                                 return b"ABCDE"
                             raise ConnectionResetError("Connection reset by peer")
+
                     stream = BrokenStream()
                     m = mock.MagicMock(status=206, read=stream.read)
                     m.__enter__.return_value = m
@@ -160,14 +163,17 @@ class TestSegmentReconnection:
                 else:
                     # Second connection resumes from byte offset 5
                     assert range_header == "bytes=5-9"
+
                     class RestStream:
                         def __init__(self):
                             self.called = False
+
                         def read(self, size):
                             if not self.called:
                                 self.called = True
                                 return b"FGHIJ"
                             return b""
+
                     stream = RestStream()
                     m = mock.MagicMock(status=206, read=stream.read)
                     m.__enter__.return_value = m

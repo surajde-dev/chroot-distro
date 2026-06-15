@@ -181,6 +181,7 @@ def download_blob(
                     raise _FallbackToSingleError
 
                 progress = byte_progress or AggregateByteProgress(probe.content_length, label=expected_hex[:12])
+                prev_sigint = signal.getsignal(signal.SIGINT)
                 try:
                     # Pre-fill byte progress with already downloaded bytes
                     already_downloaded = 0
@@ -203,8 +204,6 @@ def download_blob(
                         local_abort.set()
                         live_responses.close_all()
                         raise KeyboardInterrupt
-
-                    prev_sigint = signal.getsignal(signal.SIGINT)
                     with contextlib.suppress(ValueError):
                         signal.signal(signal.SIGINT, _on_sigint)
                     pool = ThreadPoolExecutor(max_workers=len(segments))
@@ -249,8 +248,8 @@ def download_blob(
 
                             # Verify the temp file BEFORE replacing dest
                             hasher = hashlib.sha256()
-                            with open(tmp, "rb") as fh:
-                                for chunk in iter(lambda: fh.read(262144), b""):
+                            with open(tmp, "rb") as fh_verify:
+                                for chunk in iter(lambda: fh_verify.read(262144), b""):
                                     hasher.update(chunk)
                             actual_hex = hasher.hexdigest()
                             if actual_hex != expected_hex.lower():

@@ -366,6 +366,7 @@ class TestDownloadFile:
                         if self.bytes_read >= 1024 * 1024:
                             chunk0_path = f"{dest}.chunk0.tmp"
                             import time
+
                             for _ in range(50):
                                 if os.path.isfile(chunk0_path) and os.path.getsize(chunk0_path) == 4 * 1024 * 1024:
                                     break

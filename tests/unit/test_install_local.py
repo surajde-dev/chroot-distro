@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+
 import pytest
 
 from chroot_distro.commands import install_local

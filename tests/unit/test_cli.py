@@ -142,6 +142,7 @@ def test_main_termux_clears_preload():
         patch.dict("chroot_distro.cli._COMMAND_HANDLERS", {"list": mock_list}),
     ):
         import os
+
         assert os.environ.get("LD_PRELOAD") == "fake-preload"
         assert os.environ.get("LD_LIBRARY_PATH") == "fake-libpath"
         main()
