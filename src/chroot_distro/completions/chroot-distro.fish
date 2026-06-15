@@ -72,6 +72,9 @@ function __chroot_distro_no_subcommand
         copy cp \
         sync run build push \
         unmount umount um \
+        kill k stop \
+        ps diff \
+        search find se \
         help h he hel
 end
 
@@ -107,6 +110,22 @@ function __chroot_distro_seen_unmount
     __fish_seen_subcommand_from unmount umount um
 end
 
+function __chroot_distro_seen_kill
+    __fish_seen_subcommand_from kill k stop
+end
+
+function __chroot_distro_seen_ps
+    __fish_seen_subcommand_from ps
+end
+
+function __chroot_distro_seen_diff
+    __fish_seen_subcommand_from diff
+end
+
+function __chroot_distro_seen_search
+    __fish_seen_subcommand_from search find se
+end
+
 function __chroot_distro_seen_help
     __fish_seen_subcommand_from help h he hel
 end
@@ -129,6 +148,10 @@ complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a run         -d 
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a build       -d 'Build an OCI image from a Dockerfile'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a push        -d 'Push a locally built image to a registry'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a unmount     -d 'Unmount a container filesystem'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a kill        -d 'Forcibly stop a running container'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a ps          -d 'List running containers'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a diff        -d 'Inspect filesystem changes in a container'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a search      -d 'Search Docker Hub for images'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a help        -d 'Show help'
 
 # Subcommand aliases (mirrors parser.py)
@@ -147,6 +170,10 @@ complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a cl    -d 'Alias
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a cp     -d 'Alias for copy'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a umount -d 'Alias for unmount'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a um    -d 'Alias for unmount'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a k     -d 'Alias for kill'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a stop  -d 'Alias for kill'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a find  -d 'Alias for search'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a se    -d 'Alias for search'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a h     -d 'Alias for help'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a he    -d 'Alias for help'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a hel   -d 'Alias for help'
@@ -392,8 +419,44 @@ complete -c chroot-distro -f -n __chroot_distro_seen_unmount \
     -s h -l help       -d 'Show help'
 
 # ---------------------------------------------------------------------------
+# kill (+ aliases k, stop)
+# ---------------------------------------------------------------------------
+complete -c chroot-distro -f -n __chroot_distro_seen_kill \
+    -a '(__chroot_distro_containers)' -d 'Container'
+complete -c chroot-distro -f -n __chroot_distro_seen_kill \
+    -s h -l help       -d 'Show help'
+
+# ---------------------------------------------------------------------------
+# ps
+# ---------------------------------------------------------------------------
+complete -c chroot-distro -f -n __chroot_distro_seen_ps \
+    -s a -l all        -d 'Show all installed containers, not just running'
+complete -c chroot-distro -f -n __chroot_distro_seen_ps \
+    -s q -l quiet      -d 'Print only container names'
+complete -c chroot-distro -f -n __chroot_distro_seen_ps \
+    -s h -l help       -d 'Show help'
+
+# ---------------------------------------------------------------------------
+# diff
+# ---------------------------------------------------------------------------
+complete -c chroot-distro -f -n __chroot_distro_seen_diff \
+    -a '(__chroot_distro_containers)' -d 'Container'
+complete -c chroot-distro -f -n __chroot_distro_seen_diff \
+    -s h -l help       -d 'Show help'
+
+# ---------------------------------------------------------------------------
+# search (+ aliases find, se)
+# ---------------------------------------------------------------------------
+complete -c chroot-distro -f -n __chroot_distro_seen_search \
+    -s l -l limit      -r -d 'Maximum number of results (default 25, max 100)'
+complete -c chroot-distro -f -n __chroot_distro_seen_search \
+    -s q -l quiet      -d 'Reserved for future use'
+complete -c chroot-distro -f -n __chroot_distro_seen_search \
+    -s h -l help       -d 'Show help'
+
+# ---------------------------------------------------------------------------
 # help (+ aliases h, he, hel)
 # ---------------------------------------------------------------------------
 complete -c chroot-distro -f -n __chroot_distro_seen_help \
-    -a 'install remove rename reset login list backup restore clear-cache copy sync run build push unmount' \
+    -a 'install remove rename reset login list backup restore clear-cache copy sync run build push unmount kill ps diff search' \
     -d 'Topic'
