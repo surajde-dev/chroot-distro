@@ -36,7 +36,11 @@ when needed (see [First-run check](#first-run-check)).
    * [`login`](#login--start-a-shell-inside-a-container)
    * [`run`](#run--run-the-image-defined-entrypoint)
    * [`list`](#list--list-installed-containers)
+   * [`ps`](#ps--list-running-containers)
+   * [`search`](#search--search-docker-hub)
+   * [`diff`](#diff--inspect-filesystem-changes)
    * [`remove`](#remove--delete-a-container)
+   * [`kill`](#kill--forcibly-stop-a-running-container)
    * [`unmount`](#unmount--unmount-a-container)
    * [`rename`](#rename--rename-a-container)
    * [`reset`](#reset--reinstall-a-container-from-scratch)
@@ -133,7 +137,8 @@ order: `sudo`, `doas`, `pkexec`, or `su`.
 | Termux, default | Prefer `su` (real root) over `sudo`. |
 | Termux, `--use-sudo` or `CHROOT_DISTRO_USE_SUDO=1` | Prefer `sudo` for elevation. |
 
-`list` and `help` do not require root and are never re-executed.
+`list`, `ps`, `search`, and `help` do not require root and are never
+re-executed.
 
 ### Quick start
 
@@ -163,8 +168,20 @@ chroot-distro push myuser/myapp:1.0
 # Rebuild from scratch (loses all in-container data)
 chroot-distro reset ubuntu
 
+# List only the containers that are currently running
+chroot-distro ps
+
+# Search Docker Hub for an image
+chroot-distro search nextcloud
+
+# See what changed in a container relative to its image
+chroot-distro diff ubuntu
+
 # Unmount bindings and end active sessions
 chroot-distro unmount ubuntu
+
+# Forcibly stop a running container (SIGKILL + unmount)
+chroot-distro kill ubuntu
 
 # Permanently remove a container (unmounts active sessions first)
 chroot-distro remove ubuntu
@@ -644,6 +661,73 @@ printed.
 
 ---
 
+### `ps` — List running containers
+
+```
+chroot-distro ps [OPTIONS]
+```
+
+List only containers that are currently **running** — those with a live
+process inside their chroot or an active namespace holder. Columns match
+`list` (rootfs size, image source, status). Does not require root.
+
+| Option | Description |
+|---|---|
+| `-a`, `--all` | Show all installed containers, not just running ones. |
+| `-q`, `--quiet` | Print only container names, one per line. |
+
+---
+
+### `search` — Search Docker Hub
+
+```
+chroot-distro search [OPTIONS] TERM
+Aliases: find, se
+```
+
+Search Docker Hub for images matching `TERM` and print the image name,
+star count, whether it is an official image, and a short description.
+Uses a single unauthenticated request to the Docker Hub search API.
+Requires network access; does **not** require root.
+
+| Option | Description |
+|---|---|
+| `-l`, `--limit N` | Maximum number of results to show (default `25`, max `100`). |
+
+**Examples:**
+
+```sh
+chroot-distro search nextcloud
+chroot-distro search --limit 50 ubuntu
+```
+
+---
+
+### `diff` — Inspect filesystem changes
+
+```
+chroot-distro diff CONTAINER
+```
+
+Inspect changes to files and directories in a container's filesystem
+relative to the OCI/Docker image it was installed from (like
+`docker diff`). The image baseline is reconstructed from the cached OCI
+layers, then compared against the live rootfs. Output uses Docker-style
+markers:
+
+| Marker | Meaning |
+|---|---|
+| `A` | File or directory was added |
+| `C` | File or directory was changed |
+| `D` | File or directory was deleted |
+
+Pseudo-filesystem mount points (`/dev`, `/proc`, `/sys`, `/run`, `/tmp`)
+are excluded. Available only for containers installed from an image whose
+layers are still present in the cache (avoid `clear-cache` to keep `diff`
+working).
+
+---
+
 ### `remove` — Delete a container
 
 ```
@@ -677,6 +761,20 @@ running, `SIGTERM` is sent (with `SIGKILL` after two seconds if needed),
 the session counter is reset to `0`, and all bind mounts are removed.
 If a path is busy, a lazy unmount (`umount -l`) is attempted as a
 fallback.
+
+---
+
+### `kill` — Forcibly stop a running container
+
+```
+chroot-distro kill CONTAINER
+Aliases: k, stop
+```
+
+Forcibly stop a running container: all processes inside its chroot are
+sent `SIGTERM` and then `SIGKILL` after a short grace period, the bind
+mounts are unmounted, and the namespace holder (if any) is released. This
+is the abrupt counterpart to `unmount` (equivalent to `docker kill`).
 
 ---
 
