@@ -276,6 +276,30 @@ def _interruptible_sleep(seconds: float, abort_event: threading.Event) -> None:
         remaining -= step
 
 
+@dataclass
+class _LiveResponses:
+    """Lock-guarded registry of in-flight responses so an aborting thread can
+    force-close a socket that a worker is blocked reading from."""
+
+    lock: threading.Lock
+    responses: set
+
+    def add(self, resp) -> None:
+        with self.lock:
+            self.responses.add(resp)
+
+    def discard(self, resp) -> None:
+        with self.lock:
+            self.responses.discard(resp)
+
+    def close_all(self) -> None:
+        with self.lock:
+            for resp in list(self.responses):
+                with contextlib.suppress(Exception):
+                    resp.close()
+            self.responses.clear()
+
+
 def _download_segment(
     seg: _Segment,
     url: str,
@@ -283,6 +307,7 @@ def _download_segment(
     aggregate: "AggregateByteProgress | None",
     abort_event: threading.Event,
     bucket: "TokenBucket | None" = None,
+    live_responses: "_LiveResponses | None" = None,
 ) -> None:
     """Download one byte-range segment to *seg.tmp_path*.
 
@@ -323,6 +348,11 @@ def _download_segment(
                 req = urllib.request.Request(url, headers=headers)
                 mode = "ab" if downloaded > 0 else "wb"
                 with opener.open(req, timeout=_SOCKET_TIMEOUT) as resp, open(seg.tmp_path, mode) as fh:
+                    if live_responses is not None:
+                        live_responses.add(resp)
+                    # If an abort raced the connection open, stop immediately.
+                    if abort_event.is_set():
+                        raise KeyboardInterrupt
                     # 416 Range Not Satisfiable → server lost range support mid-download
                     if resp.status == 416:
                         raise _RangeNotSupportedError(
@@ -351,6 +381,8 @@ def _download_segment(
                         aggregate.add(unsent)
                     fh.flush()
                     os.fsync(fh.fileno())
+                if live_responses is not None:
+                    live_responses.discard(resp)
                 # verify size
                 actual = os.path.getsize(seg.tmp_path)
                 if actual != expected:
