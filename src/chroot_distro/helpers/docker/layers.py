@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import ssl
 import threading
 import time
@@ -24,6 +25,7 @@ from chroot_distro.helpers.download import (
     _compute_segments,
     _download_segment,
     _FallbackToSingleError,
+    _LiveResponses,
     _probe_url,
     _ProbeResult,
     _Segment,
@@ -195,6 +197,16 @@ def download_blob(
                         seg_headers["Authorization"] = f"Bearer {token}"
 
                     local_abort = abort_event or threading.Event()
+                    live_responses = _LiveResponses(lock=threading.Lock(), responses=set())
+
+                    def _on_sigint(_signum, _frame):
+                        local_abort.set()
+                        live_responses.close_all()
+                        raise KeyboardInterrupt
+
+                    prev_sigint = signal.getsignal(signal.SIGINT)
+                    with contextlib.suppress(ValueError):
+                        signal.signal(signal.SIGINT, _on_sigint)
                     pool = ThreadPoolExecutor(max_workers=len(segments))
                     try:
                         futures = {
@@ -206,6 +218,7 @@ def download_blob(
                                 progress,
                                 local_abort,
                                 bucket,
+                                live_responses,
                             ): seg
                             for seg in segments
                         }
@@ -213,10 +226,12 @@ def download_blob(
                             future.result()
                     except KeyboardInterrupt:
                         local_abort.set()
+                        live_responses.close_all()
                         pool.shutdown(wait=False, cancel_futures=True)
                         raise
                     except Exception as exc:
                         local_abort.set()
+                        live_responses.close_all()
                         pool.shutdown(wait=False, cancel_futures=True)
                         raise _FallbackToSingleError from exc
                     else:
