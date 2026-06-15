@@ -108,6 +108,89 @@ def snapshot(rootfs: str) -> dict[str, tuple[typing.Any, ...]]:
     return state
 
 
+def baseline_from_layers(layer_paths: list[str]) -> dict[str, tuple[typing.Any, ...]]:
+    """Reconstruct the image's path set by replaying cached layer tars.
+
+    Reads each gzipped/zstd layer tar in order (oldest first) and applies its
+    members and OCI whiteouts (``.wh.<name>`` deletes one entry,
+    ``.wh..wh..opq`` clears a directory's contents) to build the set of paths
+    the image shipped. Returns ``{rel_path: fingerprint}`` matching the tuple
+    shapes produced by :func:`snapshot`, but with a coarse fingerprint:
+
+        ("dir",)
+        ("symlink", target)
+        ("file", size)
+
+    Only fields that survive tar round-tripping are recorded, so callers should
+    compare conservatively (e.g. flag a file modified only when its size
+    differs) to avoid false positives on mtime/crc that tars do not preserve.
+    """
+    state: dict[str, tuple[typing.Any, ...]] = {}
+    for layer_path in layer_paths:
+        try:
+            tf = tarfile.open(layer_path, mode="r:*")
+        except (OSError, tarfile.TarError):
+            continue
+        try:
+            for member in tf:
+                name = member.name.lstrip("./")
+                if not name:
+                    continue
+                base = os.path.basename(name)
+                parent = os.path.dirname(name)
+                if base == ".wh..wh..opq":
+                    prefix = (parent + "/") if parent else ""
+                    for key in [k for k in state if parent and (k == parent or k.startswith(prefix))]:
+                        if key != parent:
+                            state.pop(key, None)
+                    continue
+                if base.startswith(".wh."):
+                    target = base[len(".wh.") :]
+                    deleted = (parent + "/" + target) if parent else target
+                    prefix = deleted + "/"
+                    for key in [k for k in state if k == deleted or k.startswith(prefix)]:
+                        state.pop(key, None)
+                    continue
+                if member.isdir():
+                    state[name] = ("dir",)
+                elif member.issym() or member.islnk():
+                    state[name] = ("symlink", member.linkname)
+                elif member.isreg():
+                    state[name] = ("file", member.size)
+        finally:
+            tf.close()
+    return state
+
+
+def diff_against_baseline(
+    baseline: dict[str, tuple[typing.Any, ...]], live: dict[str, tuple[typing.Any, ...]]
+) -> tuple[list[str], list[str], list[str]]:
+    """Compare a coarse layer *baseline* against a live rootfs snapshot.
+
+    Returns (added, modified, deleted) sorted rel-path lists. A path is
+    "modified" only when a comparable field actually differs (regular-file size
+    or symlink target); mtime/crc are ignored because the baseline derived from
+    tar members cannot preserve them.
+    """
+    added: list[str] = []
+    modified: list[str] = []
+    for path, live_fp in live.items():
+        base_fp = baseline.get(path)
+        if base_fp is None:
+            added.append(path)
+            continue
+        live_kind = live_fp[0]
+        base_kind = base_fp[0]
+        if live_kind != base_kind:
+            modified.append(path)
+        elif live_kind == "file" and live_fp[1] != base_fp[1]:
+            modified.append(path)
+        elif live_kind == "symlink" and live_fp[1] != base_fp[1]:
+            modified.append(path)
+    deleted = [k for k in baseline if k not in live]
+    return sorted(added), sorted(modified), sorted(deleted)
+
+
 def diff_snapshots(
     before: dict[str, tuple[typing.Any, ...]], after: dict[str, tuple[typing.Any, ...]]
 ) -> tuple[list[str], list[str], list[str]]:
