@@ -670,10 +670,11 @@ def _command_login_inner(container_name: str, args) -> None:
                 )
                 for sm in specials:
                     mount_manager.apply_special_mount(rootfs, sm, holder=holder)
-                # On Termux the devpts above is a fresh newinstance; point
-                # /dev/ptmx at it so pty allocation uses the new instance.
-                if IS_TERMUX:
-                    mount_manager.bind_ptmx_to_pts(rootfs, holder=holder)
+                # The devpts above is a fresh newinstance on every platform;
+                # point /dev/ptmx at it so pty allocation uses the new instance
+                # instead of the host multiplexer (which breaks pty creation
+                # and leaks host ptys).
+                mount_manager.bind_ptmx_to_pts(rootfs, holder=holder)
             except Exception as e:
                 mount_manager.unmount_all(rootfs, holder=holder)
                 if holder is not None:
