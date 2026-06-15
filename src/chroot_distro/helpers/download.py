@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import ssl
 import threading
 import time
@@ -636,11 +637,37 @@ def _download_single(
 
     req = urllib.request.Request(url, headers=_ua_headers())
     last_exc: BaseException | None = None
+    abort_event = threading.Event()
+
+    def _on_sigint(_signum, _frame):
+        abort_event.set()
+        raise KeyboardInterrupt
+
+    prev_sigint = signal.getsignal(signal.SIGINT)
+    with contextlib.suppress(ValueError):
+        signal.signal(signal.SIGINT, _on_sigint)
+    try:
+        return _download_single_loop(req, dest, bucket, max_retries, retry_delays, abort_event, last_exc)
+    finally:
+        with contextlib.suppress(ValueError):
+            signal.signal(signal.SIGINT, prev_sigint)
+
+
+def _download_single_loop(
+    req: urllib.request.Request,
+    dest: str,
+    bucket: "TokenBucket | None",
+    max_retries: int,
+    retry_delays: tuple[float, ...],
+    abort_event: threading.Event,
+    last_exc: BaseException | None,
+) -> None:
+    url = req.full_url
     for attempt in range(max_retries + 1):
         if attempt > 0:
             delay = retry_delays[attempt - 1]
             warn(f"Retry {attempt}/{max_retries} in {delay}s (reason: {last_exc})...")
-            time.sleep(delay)
+            _interruptible_sleep(delay, abort_event)
 
         try:
             with (
