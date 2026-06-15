@@ -203,35 +203,25 @@ def get_special_mounts(
     # ptys as its controlling terminal. /dev/ptmx is pointed at this instance
     # in login via bind_ptmx_to_pts().
     #
-    # Regular Linux: the inherited login pty is a real, matching /dev/pts node,
-    # so we bind the host /dev/pts (in get_bindings) and only mount a shared
-    # devpts here as a fallback when the host has no /dev/pts.
-    if IS_TERMUX:
-        specials.append(
-            SpecialMount(
-                fstype="devpts",
-                source="devpts",
-                target="/dev/pts",
-                options="gid=5,mode=620,ptmxmode=0666,newinstance",
-                mkdir=True,
-                check="devpts",
-                optional=False,  # PTYs are required for a functional chroot login
-            )
+    # Regular Linux: bind-mounting the host /dev/pts (and especially the host
+    # /dev/ptmx) into the chroot breaks pty allocation on modern systemd hosts
+    # where /dev/ptmx is a real node bound to the host devpts via ptmxmode, and
+    # leaks devpts state that exhausts the host pty pool. Instead mount a fresh
+    # private `newinstance` devpts here and point /dev/ptmx at it (via
+    # bind_ptmx_to_pts in login), exactly as on Termux. The chroot then owns a
+    # self-contained pty multiplexer that allocates working ptys and tears down
+    # cleanly on logout without touching the host pty pool.
+    specials.append(
+        SpecialMount(
+            fstype="devpts",
+            source="devpts",
+            target="/dev/pts",
+            options="gid=5,mode=620,ptmxmode=0666,newinstance",
+            mkdir=True,
+            check="devpts",
+            optional=False,  # PTYs are required for a functional chroot login
         )
-    elif not os.path.exists("/dev/pts"):
-        specials.append(
-            SpecialMount(
-                fstype="devpts",
-                source="devpts",
-                target="/dev/pts",
-                # No `newinstance`: share the host pty namespace so the
-                # controlling terminal resolves inside the chroot.
-                options="gid=5,mode=620,ptmxmode=0666",
-                mkdir=True,
-                check="devpts",
-                optional=False,  # PTYs are required for a functional chroot login
-            )
-        )
+    )
 
     if enable_usb:
         specials.extend(_usb_specials())
@@ -391,20 +381,14 @@ def get_bindings(
         binds.append(("/proc", "/proc"))
     binds.append(("/sys", "/sys"))
 
-    # Check if host /dev/pts and /dev/shm exist and mount them.
+    # We never bind the host /dev/pts or host /dev/ptmx into the chroot. A fresh
+    # private `newinstance` devpts is mounted in get_special_mounts() and
+    # /dev/ptmx is pointed at it after mounting (bind_ptmx_to_pts in login).
     #
-    # On Termux we do NOT bind the host /dev/pts: a fresh `newinstance` devpts
-    # is mounted in get_special_mounts() and /dev/ptmx is pointed at it after
-    # mounting (bind_ptmx_to_pts in login). Binding the host /dev/pts here
-    # would shadow that fresh instance and reintroduce the ttyname() failure
-    # caused by the major 88 vs 136 mismatch on Android.
-    #
-    # On regular Linux the inherited login pty is a real matching node, so we
-    # bind the host /dev/pts (and /dev/ptmx when it is a real device node).
-    if not IS_TERMUX and os.path.exists("/dev/pts"):
-        binds.append(("/dev/pts", "/dev/pts"))
-        if os.path.exists("/dev/ptmx") and not os.path.islink("/dev/ptmx"):
-            binds.append(("/dev/ptmx", "/dev/ptmx"))
+    # On Termux this avoids the ttyname() failure caused by the major 88 vs 136
+    # mismatch on Android. On regular Linux this avoids breaking pty allocation
+    # on systemd hosts (where /dev/ptmx is a real node tied to the host devpts)
+    # and prevents leaking devpts state that exhausts the host pty pool.
     if os.path.exists("/dev/shm"):
         binds.append(("/dev/shm", "/dev/shm"))
 
