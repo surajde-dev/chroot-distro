@@ -268,6 +268,8 @@ def download_blob(
                             with contextlib.suppress(OSError):
                                 os.remove(chunks_meta_path)
                 finally:
+                    with contextlib.suppress(NameError, ValueError):
+                        signal.signal(signal.SIGINT, prev_sigint)
                     if byte_progress is None:
                         progress.clear()
         except _FallbackToSingleError:
