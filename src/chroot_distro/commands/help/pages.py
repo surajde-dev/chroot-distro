@@ -558,6 +558,80 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
             f"{PROGRAM_NAME} run ubuntu --isolated -- /bin/echo hi",
         ],
     },
+    "kill": {
+        "usage": "kill CONTAINER",
+        "aliases": ("k", "stop"),
+        "summary": (
+            "Forcibly stop a running container. All processes inside the "
+            "container's chroot are sent SIGTERM and then SIGKILL after a "
+            "short grace period, the filesystem bindings are unmounted, and "
+            "the namespace holder (if any) is released. This is the abrupt "
+            "counterpart to 'unmount'."
+        ),
+        "options": [
+            ("-h, --help", "Show this help."),
+        ],
+        "examples": [
+            f"{PROGRAM_NAME} kill ubuntu",
+        ],
+    },
+    "ps": {
+        "usage": "ps [OPTIONS]",
+        "summary": (
+            "List running containers: those with a live process inside their "
+            "chroot or an active namespace holder. Shows rootfs size, image "
+            "source, and status, like 'list'."
+        ),
+        "options": [
+            ("-h, --help", "Show this help."),
+            ("-a, --all", "Show all installed containers, not just running ones."),
+            ("-q, --quiet", "Print only container names, one per line."),
+        ],
+        "examples": [
+            f"{PROGRAM_NAME} ps",
+            f"{PROGRAM_NAME} ps --all",
+        ],
+    },
+    "diff": {
+        "usage": "diff CONTAINER",
+        "summary": (
+            "Inspect changes to files and directories in a container's "
+            "filesystem relative to the OCI/Docker image it was installed "
+            "from. Output uses Docker-style markers:"
+            "\n\n"
+            "  A  a file or directory was added\n"
+            "  C  a file or directory was changed\n"
+            "  D  a file or directory was deleted"
+            "\n\n"
+            "Pseudo-filesystem mount points (/dev, /proc, /sys, /run, /tmp) "
+            "are excluded. Available only for containers installed from an "
+            "image whose layers are still present in the cache."
+        ),
+        "options": [
+            ("-h, --help", "Show this help."),
+        ],
+        "examples": [
+            f"{PROGRAM_NAME} diff ubuntu",
+        ],
+    },
+    "search": {
+        "usage": "search [OPTIONS] TERM",
+        "aliases": ("find", "se"),
+        "summary": (
+            "Search Docker Hub for images matching TERM. Prints the image "
+            "name, star count, whether it is an official image, and a short "
+            "description. Requires network access; does not require root."
+        ),
+        "options": [
+            ("-h, --help", "Show this help."),
+            ("-l, --limit [N]", "Maximum number of results to show (default: 25, max: 100)."),
+            ("-q, --quiet", "Reserved for future use."),
+        ],
+        "examples": [
+            f"{PROGRAM_NAME} search nextcloud",
+            f"{PROGRAM_NAME} search --limit 50 ubuntu",
+        ],
+    },
     "sync": {
         "usage": "sync [OPTIONS] [DIST:]SRC [DIST:]DEST",
         "summary": (
@@ -611,4 +685,8 @@ TOP_COMMANDS = [
     ("sync", "Sync files from/to container."),
     ("build", "Build an OCI image from a Dockerfile."),
     ("push", "Push a locally built image to a registry."),
+    ("ps", "List running containers."),
+    ("kill", "Forcibly stop a running container."),
+    ("diff", "Inspect filesystem changes in a container."),
+    ("search", "Search Docker Hub for images."),
 ]
