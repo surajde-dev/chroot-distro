@@ -8,16 +8,20 @@ from chroot_distro.commands.backup import command_backup
 from chroot_distro.commands.build import command_build
 from chroot_distro.commands.clear_cache import command_clear_cache
 from chroot_distro.commands.copy import command_copy
+from chroot_distro.commands.diff import command_diff
 from chroot_distro.commands.help import HELP_COMMANDS, command_help
 from chroot_distro.commands.install import command_install
+from chroot_distro.commands.kill import command_kill
 from chroot_distro.commands.list_cmd import command_list
 from chroot_distro.commands.login import command_login
+from chroot_distro.commands.ps import command_ps
 from chroot_distro.commands.push import command_push
 from chroot_distro.commands.remove import command_remove
 from chroot_distro.commands.rename import command_rename
 from chroot_distro.commands.reset import command_reset
 from chroot_distro.commands.restore import command_restore
 from chroot_distro.commands.run import command_run
+from chroot_distro.commands.search import command_search
 from chroot_distro.commands.sync import command_sync
 from chroot_distro.commands.unmount import command_unmount
 from chroot_distro.constants import IS_TERMUX, PROGRAM_NAME, PROGRAM_VERSION
@@ -51,6 +55,10 @@ _COMMAND_HANDLERS = {
     "unmount": command_unmount,
     "build": command_build,
     "push": command_push,
+    "kill": command_kill,
+    "ps": command_ps,
+    "diff": command_diff,
+    "search": command_search,
     "help": command_help,
 }
 
@@ -178,11 +186,15 @@ def main() -> None:
     # Root check requirement:
     # - In normal Linux: all commands require root except "help"
     # - In Termux: all commands require root except "list" and "help"
+    # `search` is network-only and never needs root. `ps` and `list` only read
+    # /proc and container metadata, so they are exempt on Termux like `help`.
     requires_root = False
-    if IS_TERMUX:
-        if canonical not in ("list", "help"):
+    if canonical in ("help", "search"):
+        requires_root = False
+    elif IS_TERMUX:
+        if canonical not in ("list", "ps"):
             requires_root = True
-    elif canonical != "help":
+    else:
         requires_root = True
 
     if requires_root:
