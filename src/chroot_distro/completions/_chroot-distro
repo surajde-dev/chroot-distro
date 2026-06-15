@@ -53,6 +53,8 @@ _chroot_distro_canonical_cmd() {
 	clear | cl) print -r clear-cache ;;
 	cp) print -r copy ;;
 	umount | um) print -r unmount ;;
+	k | stop) print -r kill ;;
+	find | se) print -r search ;;
 	h | he | hel) print -r help ;;
 	*) print -r "${1}" ;;
 	esac
@@ -106,6 +108,14 @@ _chroot_distro() {
 			'unmount:unmount a container filesystem'
 			'umount:alias for unmount'
 			'um:alias for unmount'
+			'kill:forcibly stop a running container'
+			'k:alias for kill'
+			'stop:alias for kill'
+			'ps:list running containers'
+			'diff:inspect filesystem changes in a container'
+			'search:search Docker Hub for images'
+			'find:alias for search'
+			'se:alias for search'
 			'help:show help'
 			'h:alias for help'
 			'he:alias for help'
@@ -271,6 +281,37 @@ _chroot_distro() {
 			;;
 
 		# -----------------------------------------------------------
+		kill)
+			_arguments \
+				'(-h --help)'{-h,--help}'[show help]' \
+				'1:container:_chroot_distro_containers'
+			;;
+
+		# -----------------------------------------------------------
+		ps)
+			_arguments \
+				'(-h --help)'{-h,--help}'[show help]' \
+				'(-a --all)'{-a,--all}'[show all installed containers, not just running]' \
+				'(-q --quiet)'{-q,--quiet}'[print only container names]'
+			;;
+
+		# -----------------------------------------------------------
+		diff)
+			_arguments \
+				'(-h --help)'{-h,--help}'[show help]' \
+				'1:container:_chroot_distro_containers'
+			;;
+
+		# -----------------------------------------------------------
+		search)
+			_arguments \
+				'(-h --help)'{-h,--help}'[show help]' \
+				'(-l --limit)'{-l,--limit}'[maximum number of results (default 25, max 100)]:count' \
+				'(-q --quiet)'{-q,--quiet}'[reserved for future use]' \
+				'1:search term'
+			;;
+
+		# -----------------------------------------------------------
 		build)
 			_arguments \
 				'(-h --help)'{-h,--help}'[show help]' \
@@ -302,7 +343,7 @@ _chroot_distro() {
 			topics=(
 				install remove rename reset login list
 				backup restore clear-cache copy sync run
-				build push unmount
+				build push unmount kill ps diff search
 			)
 			_describe 'topic' topics
 			;;
