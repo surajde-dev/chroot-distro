@@ -40,6 +40,9 @@ REQUIRED_ARGS = {
     "run": [("container_name", "container name is not specified.")],
     "push": [("image_ref", "image reference is not specified.")],
     "unmount": [("container_name", "container name is not specified.")],
+    "kill": [("container_name", "container name is not specified.")],
+    "diff": [("container_name", "container name is not specified.")],
+    "search": [("term", "search term is not specified.")],
 }
 
 
@@ -60,6 +63,10 @@ ALIAS_TO_CANONICAL = {
     "cp": "copy",
     "umount": "unmount",
     "um": "unmount",
+    "k": "kill",
+    "stop": "kill",
+    "find": "search",
+    "se": "search",
     "h": "help",
     "he": "help",
     "hel": "help",
@@ -153,6 +160,10 @@ def build_parser() -> _CdArgumentParser:
     _push(sub)
     _run(sub)
     _unmount(sub)
+    _kill(sub)
+    _ps(sub)
+    _diff(sub)
+    _search(sub)
 
     return parser
 
@@ -359,4 +370,35 @@ def _unmount(sub):
     p = sub.add_parser("unmount", aliases=["umount", "um"], add_help=False)
     p._cd_command = "unmount"
     p.add_argument("container_name", nargs="?", default=None)
+    p.add_argument("-h", "--help", action="store_true")
+
+
+def _kill(sub):
+    p = sub.add_parser("kill", aliases=["k", "stop"], add_help=False)
+    p._cd_command = "kill"
+    p.add_argument("container_name", nargs="?", default=None)
+    p.add_argument("-h", "--help", action="store_true")
+
+
+def _ps(sub):
+    p = sub.add_parser("ps", add_help=False)
+    p._cd_command = "ps"
+    p.add_argument("-a", "--all", action="store_true")
+    p.add_argument("-q", "--quiet", action="store_true")
+    p.add_argument("-h", "--help", action="store_true")
+
+
+def _diff(sub):
+    p = sub.add_parser("diff", add_help=False)
+    p._cd_command = "diff"
+    p.add_argument("container_name", nargs="?", default=None)
+    p.add_argument("-h", "--help", action="store_true")
+
+
+def _search(sub):
+    p = sub.add_parser("search", aliases=["find", "se"], add_help=False)
+    p._cd_command = "search"
+    p.add_argument("term", nargs="?", default=None)
+    p.add_argument("-l", "--limit", type=int, default=25, metavar="N")
+    p.add_argument("-q", "--quiet", action="store_true")
     p.add_argument("-h", "--help", action="store_true")
