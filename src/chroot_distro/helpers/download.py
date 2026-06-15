@@ -498,7 +498,7 @@ def _download_multi(
                     )
                     for s in meta.get("segments", [])
                 ]
-        except Exception:
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
             pass
 
     if not segments:
@@ -529,7 +529,7 @@ def _download_multi(
             }
             with open(chunks_meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f)
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     if len(segments) == 1:
@@ -546,7 +546,15 @@ def _download_multi(
         aggregate.add(already_downloaded)
 
     abort_event = threading.Event()
+    live_responses = _LiveResponses(lock=threading.Lock(), responses=set())
     ua = _ua_headers()
+
+    def _on_sigint(_signum, _frame):
+        abort_event.set()
+        live_responses.close_all()
+        raise KeyboardInterrupt
+
+    prev_sigint = signal.getsignal(signal.SIGINT)
 
     if already_downloaded:
         log_info(
@@ -556,6 +564,9 @@ def _download_multi(
         log_info(f"Downloading {fmt_size(total)} in {len(segments)} segments ({len(segments)} connections)...")
 
     success = False
+    with contextlib.suppress(ValueError):
+        # signal.signal only works on the main thread; suppress if not.
+        signal.signal(signal.SIGINT, _on_sigint)
     try:
         pool = ThreadPoolExecutor(max_workers=len(segments))
         try:
@@ -568,6 +579,7 @@ def _download_multi(
                     aggregate,
                     abort_event,
                     bucket,
+                    live_responses,
                 ): seg
                 for seg in segments
             }
@@ -579,10 +591,12 @@ def _download_multi(
             raise _FallbackToSingleError from exc
         except KeyboardInterrupt:
             abort_event.set()
+            live_responses.close_all()
             pool.shutdown(wait=False, cancel_futures=True)
             raise
         except Exception:
             abort_event.set()
+            live_responses.close_all()
             pool.shutdown(wait=False, cancel_futures=True)
             raise
         else:
@@ -595,6 +609,8 @@ def _download_multi(
         success = True
 
     finally:
+        with contextlib.suppress(ValueError):
+            signal.signal(signal.SIGINT, prev_sigint)
         aggregate.clear()
         if success:
             for seg in segments:
