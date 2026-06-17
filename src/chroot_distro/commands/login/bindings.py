@@ -439,7 +439,16 @@ def get_bindings(
     if os.path.exists("/dev/shm"):
         binds.append(("/dev/shm", "/dev/shm"))
 
-    if os.path.exists("/run"):
+    # /run handling.
+    #
+    # By default we bind the whole host /run with rslave propagation so new
+    # sockets created after mount stay visible. But on Linux with
+    # --shared-display, binding all of host /run also exposes unrelated
+    # runtime sockets (NetworkManager, systemd-notify, ...). In that case we
+    # skip the broad bind here and let the caller mount a fresh private tmpfs
+    # at /run and bind only the specific display sockets instead.
+    narrow_run = (not IS_TERMUX) and shared_display and bool(display_socket_binds)
+    if os.path.exists("/run") and not narrow_run:
         binds.append(("/run", "/run"))
         # Mark /run for rslave propagation so new sockets (Wayland,
         # PipeWire, PulseAudio, D-Bus) created after mount are visible.
