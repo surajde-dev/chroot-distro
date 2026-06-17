@@ -479,20 +479,13 @@ def get_bindings(
 
     # /run handling.
     #
-    # By default we bind the whole host /run with rslave propagation so new
-    # sockets created after mount stay visible. But on Linux with
-    # --shared-display, binding all of host /run also exposes unrelated
-    # runtime sockets (NetworkManager, systemd-notify, ...). In that case we
-    # skip the broad bind here and let the caller mount a fresh private tmpfs
-    # at /run and bind only the specific display sockets instead.
-    narrow_run = (not IS_TERMUX) and shared_display and bool(display_socket_binds)
-    if os.path.exists("/run") and not narrow_run:
-        binds.append(("/run", "/run"))
-        # Mark /run for rslave propagation so new sockets (Wayland,
-        # PipeWire, PulseAudio, D-Bus) created after mount are visible.
-        rslave_targets.append(os.path.join(rootfs, "run"))
+    # /run is NEVER bound from the host: a fresh per-container tmpfs is
+    # mounted at /run by get_special_mounts() so the container cannot see
+    # the host's runtime sockets (PulseAudio, D-Bus, systemd, NetworkManager,
+    # ...). With --shared-display the specific display/audio/D-Bus sockets are
+    # bound on top of that tmpfs via display_socket_binds below.
 
-    # If minimal mode is enabled, we only bind the bare systems (/dev, /proc, /sys, /run)
+    # If minimal mode is enabled, we only bind the bare systems (/dev, /proc, /sys)
     if minimal:
         return (
             [(src, os.path.join(rootfs, dst.lstrip("/"))) for src, dst in binds],
@@ -534,7 +527,9 @@ def get_bindings(
             if os.path.exists(host_tmp):
                 binds.append((host_tmp, "/tmp"))
     else:
-        if (shared_tmp or not isolated) and os.path.exists("/tmp"):
+        # /tmp defaults to a fresh tmpfs (get_special_mounts); bind the host
+        # /tmp only when the user explicitly opts in with --shared-tmp.
+        if shared_tmp and os.path.exists("/tmp"):
             binds.append(("/tmp", "/tmp"))
 
     # 5. Display sharing (X11 + Wayland + Sound + D-Bus)
@@ -549,10 +544,11 @@ def get_bindings(
             if os.path.exists(x11_path):
                 binds.append((x11_path, x11_path))
 
-    # 5a. Display socket binds (Linux + --shared-display): when /run was
-    # narrowed, bind only the specific runtime sockets (Wayland, PulseAudio,
-    # PipeWire, D-Bus) and the runtime dir itself, at their host paths.
-    if narrow_run and display_socket_binds:
+    # 5a. Display socket binds (Linux + --shared-display): /run is a fresh
+    # tmpfs, so bind only the specific runtime sockets (Wayland, PulseAudio,
+    # PipeWire, D-Bus) and the runtime dir itself, at their host paths, on
+    # top of that tmpfs.
+    if not IS_TERMUX and shared_display and display_socket_binds:
         bound_srcs = {src for src, _ in binds}
         for path in display_socket_binds:
             if path not in bound_srcs and os.path.exists(path):
