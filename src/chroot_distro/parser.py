@@ -124,7 +124,7 @@ def _add_login_or_run_common(p):
         action="store_true",
         help="Alias for --shared-display (backward compatibility)",
     )
-    p.add_argument("-b", "--bind", action="append", metavar="PATH[:PATH]")
+    p.add_argument("-b", "--bind", action="append", metavar="PATH[:PATH[:OPTIONS]]")
     p.add_argument("--hostname", metavar="STRING")
     p.add_argument("-w", "--work-dir", dest="work_dir", metavar="PATH")
     p.add_argument("-e", "--env", action="append", metavar="VAR=VALUE")
