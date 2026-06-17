@@ -517,6 +517,7 @@ def _command_login_inner(container_name: str, args) -> None:
         )
 
     x11_auth_binds: list[str] = []
+    display_socket_binds: list[str] = []
     if not IS_TERMUX and dist_type == "normal" and not minimal and shared_display:
         if not use_shared_home and login_user != "root" and login_uid is not None:
             invoking_uid = resolve_invoking_uid()
