@@ -69,58 +69,38 @@ def _socket_from_dbus_address(dbus_addr: str) -> str | None:
 
 
 def resolve_display_socket_binds(env: dict[str, str]) -> list[str]:
-    """Return concrete host socket paths to bind for --shared-display.
+    """Return host paths to bind for --shared-display.
 
-    Instead of bind-mounting the whole host /run (which exposes
-    NetworkManager, systemd-notify and other unrelated runtime sockets),
-    bind only the sockets a GUI session actually needs:
-      - Wayland compositor socket (XDG_RUNTIME_DIR/<WAYLAND_DISPLAY>)
-      - PulseAudio socket (from PULSE_SERVER or the default location)
-      - PipeWire socket (XDG_RUNTIME_DIR/pipewire-0)
-      - D-Bus session bus socket (from DBUS_SESSION_BUS_ADDRESS or default)
+    Rather than bind-mounting the whole host /run (which exposes
+    NetworkManager, systemd-notify and other unrelated runtime sockets) OR
+    binding fragile individual socket files, bind the user's whole
+    XDG_RUNTIME_DIR (``/run/user/<uid>``) as a single directory. That
+    preserves the host directory's ownership/permissions (so the guest UID
+    can traverse it) and exposes every session socket the GUI needs
+    (Wayland, PulseAudio, PipeWire, D-Bus) while still keeping the host's
+    broad /run hidden. The caller binds this recursively with rslave so
+    sockets created after mount stay visible.
 
-    Only paths that exist on the host are returned. The runtime dir itself
-    is included so the parent directory exists inside the container before
-    the socket binds are applied.
+    A D-Bus session socket that lives *outside* the runtime dir is added
+    individually as a fallback. Only paths that exist are returned, runtime
+    dir first so it is bound before any nested fallback.
     """
     uid = resolve_invoking_uid()
     runtime = env.get("XDG_RUNTIME_DIR") or get_host_env_var("XDG_RUNTIME_DIR") or _runtime_dir(uid)
-
-    candidates: list[str] = []
-
-    # Wayland socket (and its absolute form if WAYLAND_DISPLAY is a path)
-    wayland_display = env.get("WAYLAND_DISPLAY", "")
-    if wayland_display:
-        if os.path.isabs(wayland_display):
-            candidates.append(wayland_display)
-        else:
-            candidates.append(os.path.join(runtime, wayland_display))
-
-    # PulseAudio socket
-    pulse_server = env.get("PULSE_SERVER", "")
-    pulse_socket = _socket_from_pulse_server(pulse_server) if pulse_server else None
-    if pulse_socket is None:
-        pulse_socket = os.path.join(runtime, "pulse", "native")
-    candidates.append(pulse_socket)
-
-    # PipeWire socket (no env var; discovered by location)
-    candidates.append(os.path.join(runtime, "pipewire-0"))
-
-    # D-Bus session bus socket
-    dbus_addr = env.get("DBUS_SESSION_BUS_ADDRESS", "")
-    dbus_socket = _socket_from_dbus_address(dbus_addr) if dbus_addr else None
-    if dbus_socket is None:
-        dbus_socket = os.path.join(runtime, "bus")
-    candidates.append(dbus_socket)
+    runtime = runtime.rstrip("/")
 
     binds: list[str] = []
     if os.path.isdir(runtime):
-        binds.append(runtime.rstrip("/"))
-    seen = set(binds)
-    for path in candidates:
-        if path and path not in seen and os.path.exists(path):
-            binds.append(path)
-            seen.add(path)
+        binds.append(runtime)
+
+    # D-Bus session socket outside the runtime dir (rare, but possible).
+    dbus_addr = env.get("DBUS_SESSION_BUS_ADDRESS", "")
+    dbus_socket = _socket_from_dbus_address(dbus_addr) if dbus_addr else None
+    if dbus_socket and os.path.exists(dbus_socket):
+        in_runtime = runtime and (dbus_socket == runtime or dbus_socket.startswith(runtime + os.sep))
+        if not in_runtime and dbus_socket not in binds:
+            binds.append(dbus_socket)
+
     return binds
 
 
