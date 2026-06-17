@@ -2,6 +2,7 @@ import contextlib
 import gzip
 import hashlib
 import io
+import json
 import os
 import stat
 import sys
@@ -160,6 +161,75 @@ def baseline_from_layers(layer_paths: list[str]) -> dict[str, tuple[typing.Any, 
         finally:
             tf.close()
     return state
+
+
+_BASELINE_CACHE_VERSION = 1
+
+
+def _baseline_to_jsonable(baseline: dict[str, tuple[typing.Any, ...]]) -> dict[str, list]:
+    """Convert baseline fingerprint tuples to JSON-serialisable lists."""
+    return {path: list(fp) for path, fp in baseline.items()}
+
+
+def _baseline_from_jsonable(data: dict[str, list]) -> dict[str, tuple[typing.Any, ...]]:
+    """Convert loaded JSON lists back into fingerprint tuples."""
+    return {path: tuple(fp) for path, fp in data.items()}
+
+
+def cached_baseline_from_layers(
+    layer_paths: list[str],
+    digests: list[str],
+    cache_path: str,
+) -> dict[str, tuple[typing.Any, ...]]:
+    """Return the image baseline, using *cache_path* to avoid re-reading layers.
+
+    The cache is a JSON document keyed by the ordered list of layer
+    *digests*. When the cached digest list matches, the stored baseline is
+    returned directly; otherwise the baseline is rebuilt from the layer
+    tars via :func:`baseline_from_layers` and the cache is refreshed.
+
+    All cache I/O is best-effort: any error falls back to a full rebuild.
+    """
+    cached = _read_baseline_cache(cache_path)
+    if cached is not None and cached.get("version") == _BASELINE_CACHE_VERSION and cached.get("digests") == digests:
+        with contextlib.suppress(Exception):
+            return _baseline_from_jsonable(cached["baseline"])
+
+    baseline = baseline_from_layers(layer_paths)
+    _write_baseline_cache(cache_path, digests, baseline)
+    return baseline
+
+
+def _read_baseline_cache(cache_path: str) -> dict | None:
+    try:
+        with open(cache_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _write_baseline_cache(
+    cache_path: str,
+    digests: list[str],
+    baseline: dict[str, tuple[typing.Any, ...]],
+) -> None:
+    payload = {
+        "version": _BASELINE_CACHE_VERSION,
+        "digests": digests,
+        "baseline": _baseline_to_jsonable(baseline),
+    }
+    tmp = cache_path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, cache_path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
 
 
 def diff_against_baseline(
