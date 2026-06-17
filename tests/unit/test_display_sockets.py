@@ -58,6 +58,19 @@ def test_resolve_display_socket_binds_adds_external_dbus():
     assert "/var/run/dbus/bus" in binds
 
 
+def test_resolve_display_socket_binds_adds_system_bus():
+    env = {"XDG_RUNTIME_DIR": "/run/user/1000"}
+    present = {"/run/user/1000", "/run/dbus/system_bus_socket"}
+    with (
+        patch("chroot_distro.helpers.display.resolve_invoking_uid", return_value=1000),
+        patch("os.path.isdir", side_effect=lambda p: p == "/run/user/1000"),
+        patch("os.path.exists", side_effect=lambda p: p in present),
+        patch("os.path.realpath", side_effect=lambda p: p),
+    ):
+        binds = resolve_display_socket_binds(env)
+    assert "/run/dbus/system_bus_socket" in binds
+
+
 def test_resolve_display_socket_binds_no_runtime_dir():
     env = {"XDG_RUNTIME_DIR": "/run/user/1000"}
     with (
