@@ -101,6 +101,18 @@ def resolve_display_socket_binds(env: dict[str, str]) -> list[str]:
         if not in_runtime and dbus_socket not in binds:
             binds.append(dbus_socket)
 
+    # System D-Bus socket: lives outside the runtime dir at a well-known
+    # path. Needed by apps/daemons that talk to system services (UPower,
+    # notification daemons, NetworkManager, ...). Bind it at its host path
+    # (resolving the common /var/run -> /run symlink) so it is reachable as
+    # /run/dbus/system_bus_socket inside the container.
+    for system_bus in ("/run/dbus/system_bus_socket", "/var/run/dbus/system_bus_socket"):
+        if os.path.exists(system_bus):
+            real = os.path.realpath(system_bus)
+            if real not in binds:
+                binds.append(real)
+            break
+
     return binds
 
 
