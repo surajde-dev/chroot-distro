@@ -126,6 +126,36 @@ def probe_unshare_flags() -> list[str]:
     return supported
 
 
+def probe_namespace_support(flags: tuple[str, ...] = _PROBE_FLAGS) -> list[str]:
+    """Return the subset of *flags* the kernel does NOT support.
+
+    Probes each flag with `unshare <flag> true` without entering any
+    namespace in the caller. An empty list means every requested namespace
+    is available, so isolation can be acquired atomically; a non-empty list
+    means the caller must fall back to full host mode (acquire none of
+    them) rather than a half-isolated session.
+    """
+    try:
+        unshare = _resolve_unshare()
+    except NamespaceError:
+        return list(flags)
+    missing: list[str] = []
+    for flag in flags:
+        try:
+            result = subprocess.run(
+                [unshare, flag, "true"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            missing.append(flag)
+            continue
+        if result.returncode != 0:
+            missing.append(flag)
+    return missing
+
+
 def read_isolation_mode(container_name: str) -> str | None:
     path = _isolation_mode_file(container_name)
     if not os.path.isfile(path):
