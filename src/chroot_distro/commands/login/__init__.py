@@ -352,6 +352,9 @@ def _command_login_inner(container_name: str, args) -> None:
     use_shared_home = getattr(args, "shared_home", False)
     shared_tmp = getattr(args, "shared_tmp", False)
     shared_display = getattr(args, "shared_display", False)
+    # Effective hostname: explicit --hostname wins, else the container name.
+    # Sanitised to a valid hostname token by the env builders / UTS setter.
+    hostname_arg = getattr(args, "hostname", None) or container_name
     raw_custom_binds = getattr(args, "bind", []) or []
     # The third ":options" field (e.g. ro) is parsed out here; get_bindings
     # only understands host:guest specs.
@@ -389,7 +392,7 @@ def _command_login_inner(container_name: str, args) -> None:
     if dist_type == "termux":
         if not login_wd:
             login_wd = TERMUX_HOME
-        child_env = _build_termux_env(rootfs, extra_env, minimal, container_name=container_name)
+        child_env = _build_termux_env(rootfs, extra_env, minimal, container_name=hostname_arg)
 
         if run_inner is not None:
             inner = run_inner
@@ -523,7 +526,7 @@ def _command_login_inner(container_name: str, args) -> None:
             extra_env,
             minimal,
             isolated,
-            container_name=container_name,
+            container_name=hostname_arg,
         )
 
         if run_inner is not None:
@@ -688,7 +691,7 @@ def _command_login_inner(container_name: str, args) -> None:
                     # Give the isolated UTS namespace its own hostname so
                     # `uname -n` reflects the container name. Cosmetic only:
                     # never fail the login if no hostname binary exists.
-                    namespace.set_namespace_hostname(holder, _safe_hostname(container_name))
+                    namespace.set_namespace_hostname(holder, _safe_hostname(hostname_arg))
                 except NamespaceError as exc:
                     session.decrement(container_name, lock_fh=lock_fh)
                     crit_error(str(exc))
