@@ -363,7 +363,7 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
                 ),
             ),
             (
-                "-b, --bind [SRC:DEST]",
+                "-b, --bind [SRC[:DEST[:OPTIONS]]]",
                 "Custom filesystem binding. The optional third field OPTIONS "
                 "is a comma-separated list of mount options applied via "
                 "remount (e.g. 'ro', 'ro,nosuid'); SELinux relabel flags z/Z "
