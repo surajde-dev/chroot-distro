@@ -713,6 +713,8 @@ def _command_login_inner(container_name: str, args) -> None:
                     enable_binfmt=not minimal,
                     enable_docker_cgroup=not minimal,
                     enable_shm=not minimal,
+                    shared_tmp=shared_tmp,
+                    shared_display=shared_display,
                 )
                 for sm in specials:
                     mount_manager.apply_special_mount(rootfs, sm, holder=holder)
