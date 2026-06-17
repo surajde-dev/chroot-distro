@@ -1,6 +1,8 @@
 import hashlib
 import os
+import ssl
 import sys
+import time
 import typing
 import urllib.error
 import urllib.parse
@@ -33,6 +35,62 @@ from chroot_distro.progress import (
     clear_bar,
     fmt_size,
 )
+
+
+# Default chunk size for chunked blob uploads (10 MiB). Overridable via
+# CD_PUSH_CHUNK_SIZE (bytes). Layers at or above this size are uploaded in
+# chunks; smaller blobs use the monolithic PUT path.
+_DEFAULT_PUSH_CHUNK_SIZE = 10 * 1024 * 1024
+
+# Connection/transport errors worth retrying.
+_TRANSIENT_ERRORS = (
+    ssl.SSLError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    TimeoutError,
+    OSError,
+)
+
+
+def _push_chunk_size() -> int:
+    raw = os.environ.get("CD_PUSH_CHUNK_SIZE", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return _DEFAULT_PUSH_CHUNK_SIZE
+
+
+def _push_max_retries() -> int:
+    from chroot_distro.constants import download_max_retries
+
+    return download_max_retries()
+
+
+def _is_retriable(exc: BaseException) -> bool:
+    """Return True for transient registry or connection failures."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code == 429
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, _TRANSIENT_ERRORS)
+    return isinstance(exc, _TRANSIENT_ERRORS)
+
+
+def _with_retry(operation: typing.Callable[[], typing.Any], what: str) -> typing.Any:
+    """Run *operation*, retrying transient failures with exponential backoff."""
+    max_retries = _push_max_retries()
+    last_exc: BaseException | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return operation()
+        except BaseException as exc:
+            last_exc = exc
+            if not _is_retriable(exc) or attempt >= max_retries:
+                raise
+            delay = min(2**attempt, 30)
+            log_info(f"{what}: transient error ({exc}); retry {attempt + 1}/{max_retries} in {delay}s...")
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 def _resolve_upload_url(base: str, location: str) -> str:
