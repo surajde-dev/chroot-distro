@@ -594,6 +594,24 @@ def _command_login_inner(container_name: str, args) -> None:
             if key not in user_env_keys:
                 child_env[key] = val
 
+        # The session D-Bus daemon authenticates the connecting peer by its
+        # SO_PEERCRED UID and refuses uid 0 (root) because it does not match
+        # the bus owner (the host user). The socket is bound and the env is
+        # forwarded correctly, but root still gets "Connection reset by peer"
+        # from notify-send and other session-bus clients. Warn and point at
+        # --user, which works because the UID then matches. The system bus is
+        # unaffected and continues to work for root.
+        if login_user == "root" and child_env.get("DBUS_SESSION_BUS_ADDRESS"):
+            invoking_uid = resolve_invoking_uid()
+            if invoking_uid != 0:
+                warn(
+                    "Logging in as root: the session D-Bus bus rejects uid 0, so "
+                    "session-bus apps (notify-send, portals, etc.) fail with "
+                    "'Connection reset by peer'. Log in as a UID-matched normal "
+                    f"user with '--user <name>' (host uid {invoking_uid}) for a "
+                    "working session bus. The system bus still works for root."
+                )
+
         # Only the specific runtime sockets are bound, not the whole host /run.
         display_socket_binds = resolve_display_socket_binds(child_env)
 
