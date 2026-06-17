@@ -174,22 +174,10 @@ def _upload_blob_bytes(
     token: str,
     registry: str = "",
 ) -> None:
-    """Upload a small in-memory blob (POST + monolithic PUT)."""
+    """Upload a small in-memory blob (POST + monolithic PUT, retry-wrapped)."""
     base = registry_base_url(registry)
-    headers = {**_ua()}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    post_req = urllib.request.Request(
-        f"{base}/v2/{repo}/blobs/uploads/",
-        data=b"",
-        method="POST",
-        headers={**headers, "Content-Length": "0"},
-    )
-    with auth_opener().open(post_req) as resp:
-        location = resp.headers.get("Location", "")
-    put_url = _resolve_upload_url(base, location)
-    sep = "&" if "?" in put_url else "?"
-    put_url = f"{put_url}{sep}digest={urllib.parse.quote(digest, safe='')}"
+    headers = _auth_headers(token)
+
     def _do() -> None:
         upload_url = _open_upload_session(base, repo, headers)
         full_put_url = _with_digest(upload_url, digest)
