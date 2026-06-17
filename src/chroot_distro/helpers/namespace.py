@@ -505,6 +505,46 @@ def make_mount_private(holder: NamespaceHolder) -> bool:
     return False
 
 
+def set_namespace_hostname(holder: NamespaceHolder, hostname: str) -> bool:
+    """Set *hostname* inside the holder's UTS namespace (best-effort).
+
+    Only attempts anything when the holder actually owns a UTS namespace
+    (i.e. --uts is among its flags). Tries the `hostname` binary first and
+    falls back to writing /proc/sys/kernel/hostname. Returns True on
+    success; logs at debug and returns False on any failure. This is
+    cosmetic (so `uname -n` shows the container name) and must never break
+    an otherwise-successful login.
+    """
+    if not hostname:
+        return False
+    flags = _read_holder_flags(holder.container_name)
+    if "--uts" not in flags:
+        log.debug("UTS namespace not held; skipping sethostname for %s", hostname)
+        return False
+
+    try:
+        result = holder.run(["hostname", hostname], capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+        log.debug("hostname %s failed: %s", hostname, (result.stderr or "").strip())
+    except OSError as exc:
+        log.debug("hostname binary unavailable in namespace: %s", exc)
+
+    # Fallback: write the UTS hostname directly via sysctl path.
+    try:
+        result = holder.run(
+            ["sh", "-c", f"printf %s {hostname!r} > /proc/sys/kernel/hostname"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return True
+        log.debug("writing /proc/sys/kernel/hostname failed: %s", (result.stderr or "").strip())
+    except OSError as exc:
+        log.debug("could not write hostname via /proc: %s", exc)
+    return False
+
+
 def check_isolation_conflicts(
     container_name: str,
     *,
