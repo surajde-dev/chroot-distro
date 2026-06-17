@@ -137,24 +137,30 @@ class _ProgressReader:
         self._tty = sys.stderr.isatty() and not is_quiet()
         self._last_shown = 0
 
+    def _maybe_draw(self, final: bool = False) -> None:
+        if not self._tty:
+            return
+        if not final and self.sent - self._last_shown < 262144:
+            return
+        self._last_shown = self.sent
+        pfx = f"{C['BLUE']}[{C['GREEN']}*{C['BLUE']}] {C['CYAN']}"
+        if self.total:
+            pct = min(self.sent * 100 // self.total, 100)
+            bar = "#" * (pct // 5) + "-" * (20 - pct // 5)
+            line = (
+                f"\r{pfx}{self._label}: [{bar}] {pct:3d}%  "
+                f"{fmt_size(self.sent)} / "
+                f"{fmt_size(self.total)}\033[K{C['RST']}"
+            )
+        else:
+            line = f"\r{pfx}{self._label}: {fmt_size(self.sent)} uploaded...\033[K{C['RST']}"
+        sys.stderr.write(line)
+        sys.stderr.flush()
+
     def read(self, size: int = -1) -> bytes:
         data = self._fh.read(size)
         self.sent += len(data)
-        if self._tty and (self.sent - self._last_shown >= 262144 or len(data) == 0):
-            self._last_shown = self.sent
-            pfx = f"{C['BLUE']}[{C['GREEN']}*{C['BLUE']}] {C['CYAN']}"
-            if self.total:
-                pct = min(self.sent * 100 // self.total, 100)
-                bar = "#" * (pct // 5) + "-" * (20 - pct // 5)
-                line = (
-                    f"\r{pfx}{self._label}: [{bar}] {pct:3d}%  "
-                    f"{fmt_size(self.sent)} / "
-                    f"{fmt_size(self.total)}\033[K{C['RST']}"
-                )
-            else:
-                line = f"\r{pfx}{self._label}: {fmt_size(self.sent)} uploaded...\033[K{C['RST']}"
-            sys.stderr.write(line)
-            sys.stderr.flush()
+        self._maybe_draw(final=(len(data) == 0))
         return data
 
 
