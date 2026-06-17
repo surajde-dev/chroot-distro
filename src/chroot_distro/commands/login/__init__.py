@@ -328,7 +328,11 @@ def _command_login_inner(container_name: str, args) -> None:
     use_shared_home = getattr(args, "shared_home", False)
     shared_tmp = getattr(args, "shared_tmp", False)
     shared_display = getattr(args, "shared_display", False)
-    custom_binds = getattr(args, "bind", []) or []
+    raw_custom_binds = getattr(args, "bind", []) or []
+    # The third ":options" field (e.g. ro) is parsed out here; get_bindings
+    # only understands host:guest specs.
+    bind_options_map = bindings.parse_bind_options(raw_custom_binds)
+    custom_binds = bindings.strip_bind_options(raw_custom_binds)
     extra_env = getattr(args, "env", []) or []
     login_cmd = getattr(args, "login_cmd", []) or []
     run_inner = getattr(args, "_run_inner", None)
@@ -629,12 +633,29 @@ def _command_login_inner(container_name: str, args) -> None:
             # Pre-clean stale mounts if any
             with contextlib.suppress(Exception):
                 mount_manager.unmount_all(rootfs, holder=holder)
+            # Resolve {guest_path: options} into {resolved_target: options}
+            # so per-bind mount options can be matched in the loop below.
+            resolved_bind_options: dict[str, str] = {}
+            for guest_dst, opts in bind_options_map.items():
+                try:
+                    resolved_target = resolve_rootfs_path(rootfs, guest_dst)
+                except OSError:
+                    resolved_target = os.path.join(rootfs, guest_dst.lstrip("/"))
+                resolved_bind_options[os.path.realpath(resolved_target)] = opts
+
             # Phase 1: bind mounts
             for src, dst in resolved_binds:
                 try:
                     is_run = os.path.realpath(dst) == os.path.realpath(os.path.join(rootfs, "run"))
                     is_wsl = src == "/usr/lib/wsl"
-                    mount_manager.safe_mount(src, dst, holder=holder, recursive=(is_run or is_wsl))
+                    mount_options = resolved_bind_options.get(os.path.realpath(dst), "")
+                    mount_manager.safe_mount(
+                        src,
+                        dst,
+                        holder=holder,
+                        recursive=(is_run or is_wsl),
+                        options=mount_options,
+                    )
                 except Exception as e:
                     mount_manager.unmount_all(rootfs, holder=holder)
                     if holder is not None:
