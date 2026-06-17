@@ -364,7 +364,11 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
             ),
             (
                 "-b, --bind [SRC:DEST]",
-                "Custom filesystem binding. Can be specified multiple times."
+                "Custom filesystem binding. The optional third field OPTIONS "
+                "is a comma-separated list of mount options applied via "
+                "remount (e.g. 'ro', 'ro,nosuid'); SELinux relabel flags z/Z "
+                "are accepted for docker-compat but ignored in a plain "
+                "chroot. Can be specified multiple times."
                 + (" Takes priority over Isolated Mode." if IS_TERMUX else " Honored in all modes."),
             ),
             ("--hostname [TEXT]", "Customize the system hostname."),
@@ -544,8 +548,12 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
                 ),
             ),
             (
-                "-b, --bind [SRC:DEST]",
-                "Custom filesystem binding. Can be specified multiple times."
+                "-b, --bind [SRC[:DEST[:OPTIONS]]]",
+                "Custom filesystem binding. The optional third field OPTIONS "
+                "is a comma-separated list of mount options applied via "
+                "remount (e.g. 'ro', 'ro,nosuid'); SELinux relabel flags z/Z "
+                "are accepted for docker-compat but ignored in a plain "
+                "chroot. Can be specified multiple times."
                 + (" Takes priority over Isolated Mode." if IS_TERMUX else " Honored in all modes."),
             ),
             ("--hostname [TEXT]", "Customize the system hostname."),
