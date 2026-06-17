@@ -110,6 +110,42 @@ def write_hosts(rootfs: str) -> None:
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
 
 
+def ensure_hosts_entry(rootfs: str, *hostnames: str) -> None:
+    """Ensure guest /etc/hosts maps each hostname to 127.0.0.1.
+
+    sudo and other tools reverse-resolve the running hostname; without a
+    matching /etc/hosts entry they fail with "unable to resolve host
+    <name>". The relevant names are only known at login (the host kernel
+    UTS name when not isolated, or the container name when isolated), after
+    /etc/hosts was written at install time, so patch it here. Idempotent:
+    a name already present on any line is left untouched. Best-effort.
+    """
+    path = os.path.join(rootfs, "etc", "hosts")
+    try:
+        with open(path) as fh:
+            existing = fh.read()
+    except OSError:
+        return
+
+    present = set()
+    for line in existing.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        present.update(stripped.split()[1:])
+
+    to_add = [h for h in dict.fromkeys(hostnames) if h and h not in present]
+    if not to_add:
+        return
+
+    suffix = ("" if existing.endswith("\n") or not existing else "\n") + "".join(
+        f"127.0.0.1   {h}\n" for h in to_add
+    )
+    with contextlib.suppress(OSError):
+        with open(path, "a") as fh:
+            fh.write(suffix)
+
+
 def register_android_ids(rootfs: str) -> None:
     """Add the Termux Android UID/GID entries to passwd/shadow/group/gshadow."""
     for p in ("etc/passwd", "etc/shadow", "etc/group", "etc/gshadow"):
