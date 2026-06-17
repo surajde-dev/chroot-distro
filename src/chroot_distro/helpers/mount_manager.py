@@ -156,12 +156,31 @@ def safe_mount(
     if not os.path.exists(source_abs):
         raise MountError(f"Mount source does not exist: {source}")
 
-    if os.path.isdir(source_abs):
+    source_is_dir = os.path.isdir(source_abs)
+
+    # Never bind a zero-byte regular file: doing so would create (or shadow)
+    # an empty target that masks a real library inside the rootfs, which
+    # makes ldconfig report "File ... is empty, not checked" on every
+    # package install. A genuine library is never zero bytes, so an empty
+    # source is always a broken/placeholder bind we must skip.
+    if not source_is_dir and os.path.isfile(source_abs):
+        try:
+            if os.path.getsize(source_abs) == 0:
+                log.debug("Skipping bind of zero-byte source %s -> %s", source, target)
+                return
+        except OSError:
+            pass
+
+    # Track whether we create an empty stub target so we can remove it if the
+    # bind fails (otherwise the empty stub shadows a real rootfs file).
+    created_stub = False
+    if source_is_dir:
         os.makedirs(target, exist_ok=True)
     else:
         os.makedirs(os.path.dirname(target), exist_ok=True)
         if not os.path.exists(target):
             open(target, "a").close()
+            created_stub = True
 
     if is_mounted(target, holder=holder):
         return
@@ -177,6 +196,11 @@ def safe_mount(
                 result.stderr,
             )
     except subprocess.CalledProcessError as e:
+        if created_stub:
+            # Remove the empty stub we created so it does not shadow a real
+            # file (e.g. the container's own libGL.so) when the bind fails.
+            with contextlib.suppress(OSError):
+                os.remove(target)
         stderr = (e.stderr or "").strip() if hasattr(e, "stderr") else ""
         raise MountError(f"Failed to mount {source} to {target}: {stderr}") from e
 

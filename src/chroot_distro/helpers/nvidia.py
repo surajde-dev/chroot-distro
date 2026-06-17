@@ -133,6 +133,28 @@ _NVIDIA_LIB_PATTERNS = (
     "libnvoptix*",
 )
 
+# Vendor-neutral GLVND dispatch libraries. These are provided by the
+# container's own Mesa/GLVND stack and must NEVER be bound from the host:
+# the host copies are frequently symlinks resolving to vendor-specific
+# targets, and shadowing the guest's real files (or leaving an empty stub)
+# corrupts its loader ("libGL.so is empty, not checked").
+_GLVND_NEUTRAL_BASENAMES = (
+    "libGL.so",
+    "libEGL.so",
+    "libGLX.so",
+    "libGLESv1_CM.so",
+    "libGLESv2.so",
+    "libOpenGL.so",
+    "libGLdispatch.so",
+    "libgbm.so",
+)
+
+
+def _is_glvnd_neutral(path: str) -> bool:
+    """Return True for vendor-neutral GLVND/GBM dispatch library names."""
+    base = os.path.basename(path)
+    return any(base == name or base.startswith(name + ".") for name in _GLVND_NEUTRAL_BASENAMES)
+
 
 def _detect_guest_lib_dirs(rootfs: str) -> tuple[str, str]:
     """Determine the guest's 64-bit and 32-bit library directories.
@@ -198,12 +220,26 @@ def find_nvidia_libraries(rootfs: str) -> list[tuple[str, str]]:
                 if not os.path.isfile(lib_path):
                     continue
 
+                # Never bind vendor-neutral GLVND dispatch libs: they belong
+                # to the container's own Mesa/GLVND stack and shadowing them
+                # corrupts its loader.
+                if _is_glvnd_neutral(lib_path):
+                    continue
+
                 # Resolve symlinks to the actual file
                 real_path = lib_path
                 if os.path.islink(lib_path):
                     real_path = os.path.realpath(lib_path)
                     if not os.path.isfile(real_path):
                         continue
+
+                # Skip zero-byte sources: a real library is never empty, and
+                # binding one leaves an empty stub that ldconfig rejects.
+                try:
+                    if os.path.getsize(real_path) == 0:
+                        continue
+                except OSError:
+                    continue
 
                 guest_path = _host_lib_to_guest_path(lib_path, lib64, lib32)
 
