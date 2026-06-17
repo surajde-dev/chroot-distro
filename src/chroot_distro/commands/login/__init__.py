@@ -715,9 +715,14 @@ def _command_login_inner(container_name: str, args) -> None:
                 resolved_bind_options[os.path.realpath(resolved_target)] = opts
 
             # Phase 1: bind mounts
+            run_root = os.path.realpath(os.path.join(rootfs, "run"))
             for src, dst in resolved_binds:
                 try:
-                    is_run = os.path.realpath(dst) == os.path.realpath(os.path.join(rootfs, "run"))
+                    dst_real = os.path.realpath(dst)
+                    # Recurse for /run and anything under it (e.g. the bound
+                    # /run/user/<uid> runtime dir) so nested socket submounts
+                    # come along.
+                    is_run = dst_real == run_root or dst_real.startswith(run_root + os.sep)
                     is_wsl = src == "/usr/lib/wsl"
                     mount_options = resolved_bind_options.get(os.path.realpath(dst), "")
                     mount_manager.safe_mount(

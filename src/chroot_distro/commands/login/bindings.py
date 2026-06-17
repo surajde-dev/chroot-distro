@@ -513,15 +513,20 @@ def get_bindings(
             if os.path.exists(x11_path):
                 binds.append((x11_path, x11_path))
 
-    # 5a. Display socket binds (Linux + --shared-display): /run is a fresh
-    # tmpfs, so bind only the specific runtime sockets (Wayland, PulseAudio,
-    # PipeWire, D-Bus) and the runtime dir itself, at their host paths, on
-    # top of that tmpfs.
+    # 5a. Display runtime-dir bind (Linux + --shared-display): the host's
+    # broad /run is not bound, so bind the user's XDG_RUNTIME_DIR
+    # (/run/user/<uid>) whole. It is mounted recursively with rslave
+    # (see rslave_targets) so it keeps the host directory ownership and all
+    # session sockets (Wayland, PulseAudio, PipeWire, D-Bus), and new
+    # sockets created after mount stay visible.
     if not IS_TERMUX and shared_display and display_socket_binds:
         bound_srcs = {src for src, _ in binds}
         for path in display_socket_binds:
             if path not in bound_srcs and os.path.exists(path):
                 binds.append((path, path))
+                bound_srcs.add(path)
+                if os.path.isdir(path):
+                    rslave_targets.append(os.path.join(rootfs, path.lstrip("/")))
                 bound_srcs.add(path)
 
     # 5b. Display auth file binds (Linux only). When /run is bound whole the
