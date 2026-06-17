@@ -406,6 +406,7 @@ def get_bindings(
     shared_tmp: bool = False,
     shared_display: bool = False,
     display_auth_binds: list[str] | None = None,
+    display_socket_binds: list[str] | None = None,
     custom_binds: list[str] | None = None,
     login_home: str = "/root",
     login_user: str = "root",
@@ -511,7 +512,19 @@ def get_bindings(
             if os.path.exists(x11_path):
                 binds.append((x11_path, x11_path))
 
-    # 5b. Display auth file binds (Linux only; runtime dir is covered by /run)
+    # 5a. Display socket binds (Linux + --shared-display): when /run was
+    # narrowed, bind only the specific runtime sockets (Wayland, PulseAudio,
+    # PipeWire, D-Bus) and the runtime dir itself, at their host paths.
+    if narrow_run and display_socket_binds:
+        bound_srcs = {src for src, _ in binds}
+        for path in display_socket_binds:
+            if path not in bound_srcs and os.path.exists(path):
+                binds.append((path, path))
+                bound_srcs.add(path)
+
+    # 5b. Display auth file binds (Linux only). When /run is bound whole the
+    # runtime dir is already covered; when narrowed, socket binds above
+    # include the runtime dir, so auth files under it are covered too.
     if not IS_TERMUX and shared_display and display_auth_binds:
         bound_srcs = {src for src, _ in binds}
         for path in display_auth_binds:
