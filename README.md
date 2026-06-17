@@ -528,7 +528,11 @@ Termux.)
   `/dev/dri/renderD*` DRM nodes, host NVIDIA `.so` libraries mapped to the
   correct guest library directory (multi-arch aware), NVIDIA config and ICD
   files (`/etc/`, EGL/Vulkan JSON descriptors, OpenCL ICD), and NVIDIA CLI
-  tools (`nvidia-smi`, etc.).
+  tools (`nvidia-smi`, etc.). Vendor-neutral GLVND/GBM dispatch libraries
+  (`libGL`, `libEGL`, `libGLX`, `libgbm`, …) and zero-byte sources are never
+  bound, so the container's own loader is not shadowed.
+- Runs independent of `--shared-display`: the GPU works whether or not the
+  display is shared.
 - Environment variables set: `__NV_PRIME_RENDER_OFFLOAD=1`,
   `__GLX_VENDOR_LIBRARY_NAME=nvidia`.
 - Guest `ldconfig` is run inside the chroot to refresh the shared library
@@ -539,10 +543,14 @@ Termux.)
 With `--isolated`, chroot-distro creates a per-container namespace holder
 (`unshare`) and runs bind mounts, special mounts, and `chroot` inside that
 environment (`nsenter`). Supported namespaces: **mount**, **PID**, **UTS**,
-and **IPC** (each is used only if the kernel supports it; mount is
-required). This is inspired by [Ubuntu-Chroot](Ubuntu-Chroot/tools/chroot.sh)
-and is **not** a full container runtime: there is no network namespace, no
-user namespace mapping, and no image layering.
+and **IPC**. Isolation is **all-or-nothing**: chroot-distro probes the full
+requested namespace set first, and if any one of them is unsupported on the
+kernel it acquires none of them and falls back fully to a non-isolated
+login (with a warning naming the missing namespace), so a session is never
+left half-isolated. This is inspired by
+[Ubuntu-Chroot](Ubuntu-Chroot/tools/chroot.sh) and is **not** a full
+container runtime: there is no network namespace, no user namespace
+mapping, and no image layering.
 
 Do not mix `--isolated` and non-isolated logins on the same container
 without running `chroot-distro unmount <name>` first. Concurrent
@@ -590,16 +598,23 @@ entries win):
    when not `--isolated` and not `--minimal`.
 4. Your `--env VAR=VALUE` entries.
 5. `HOME`, `USER`, `TERM` (default `xterm-256color`), `COLORTERM`
-   (when set on the host).
+   (when set on the host), and `HOSTNAME` (the `--hostname` value, else the
+   container name).
 6. When display sharing is active (via `--shared-display`):
    `DISPLAY`, `XAUTHORITY`, `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`,
    `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, `DESKTOP_SESSION`,
    `PULSE_SERVER`, `DBUS_SESSION_BUS_ADDRESS`. Your `--env` entries override
    these.
-7. On Linux (unless `--minimal`): GPU env vars when NVIDIA is auto-detected:
+7. On Linux (unless `--minimal`): GPU env vars when NVIDIA is auto-detected
+   (independent of `--shared-display`):
    native — `__NV_PRIME_RENDER_OFFLOAD`, `__GLX_VENDOR_LIBRARY_NAME`;
    WSL2 — `GALLIUM_DRIVER`, `MESA_D3D12_DEFAULT_DEVICE_TYPE`,
    `LIBGL_ALWAYS_SOFTWARE`. Your `--env` entries override these.
+
+`HOSTNAME` is always set to the container name (or `--hostname`). The
+`hostname`/`uname` commands report it only under `--isolated`, where the
+UTS namespace is given a real hostname; without `--isolated` they still
+report the host's name (no UTS namespace to change).
 
 On Termux (unless isolated or minimal), `$PREFIX/bin` is appended to
 `PATH`. A snippet at `/etc/profile.d/termux-profile.sh` re-applies
