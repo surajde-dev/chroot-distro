@@ -642,6 +642,20 @@ def _command_login_inner(container_name: str, args) -> None:
     use_namespaces = isolated and not minimal
     holder = None
 
+    # Namespace isolation is all-or-nothing: probe the full requested set
+    # before touching the session counter or any mount. If any namespace is
+    # unsupported on this kernel, acquire none of them and fall back fully to
+    # host mode, rather than leaving a half-isolated session behind.
+    if use_namespaces:
+        missing = namespace.probe_namespace_support()
+        if missing:
+            warn(
+                "Namespace isolation unavailable on this kernel "
+                f"(missing: {' '.join(missing)}). Falling back to non-isolated login."
+            )
+            use_namespaces = False
+            isolated = False
+
     try:
         host_mounts_exist = bool(mount_manager.get_active_mounts(rootfs))
         namespace.check_isolation_conflicts(
