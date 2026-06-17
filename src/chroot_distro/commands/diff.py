@@ -3,11 +3,15 @@ import os
 import sys
 
 from chroot_distro.helpers.docker import layer_cache_path
-from chroot_distro.helpers.layer_diff import baseline_from_layers, diff_against_baseline, snapshot
+from chroot_distro.helpers.layer_diff import (
+    cached_baseline_from_layers,
+    diff_against_baseline,
+    snapshot,
+)
 from chroot_distro.locking import ContainerLock
 from chroot_distro.message import C, crit_error, msg
 from chroot_distro.names import require_valid_name
-from chroot_distro.paths import container_manifest, container_rootfs
+from chroot_distro.paths import container_dir, container_manifest, container_rootfs
 from chroot_distro.progress import loading_line
 
 # Top-level directories that are bind/pseudo mounts at login time and never
@@ -67,8 +71,9 @@ def command_diff(args) -> None:
             )
             sys.exit(1)
 
+        baseline_cache = os.path.join(container_dir(container_name), "diff_baseline.json")
         with loading_line("Reconstructing image baseline..."):
-            baseline = baseline_from_layers(layer_paths)
+            baseline = cached_baseline_from_layers(layer_paths, digests, baseline_cache)
         with loading_line("Scanning container filesystem..."):
             live = snapshot(rootfs)
 
