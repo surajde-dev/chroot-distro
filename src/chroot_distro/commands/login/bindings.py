@@ -527,7 +527,6 @@ def get_bindings(
                 bound_srcs.add(path)
                 if os.path.isdir(path):
                     rslave_targets.append(os.path.join(rootfs, path.lstrip("/")))
-                bound_srcs.add(path)
 
     # 5b. Display auth file binds (Linux only). When /run is bound whole the
     # runtime dir is already covered; when narrowed, socket binds above
