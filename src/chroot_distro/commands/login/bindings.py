@@ -448,11 +448,11 @@ def get_bindings(
 
     # /run handling.
     #
-    # /run is NEVER bound from the host: a fresh per-container tmpfs is
-    # mounted at /run by get_special_mounts() so the container cannot see
-    # the host's runtime sockets (PulseAudio, D-Bus, systemd, NetworkManager,
-    # ...). With --shared-display the specific display/audio/D-Bus sockets are
-    # bound on top of that tmpfs via display_socket_binds below.
+    # The host's /run is NEVER bound: the container uses its own (empty)
+    # /run directory, so it cannot see the host's runtime sockets
+    # (PulseAudio, D-Bus, systemd, NetworkManager, ...). With
+    # --shared-display the specific display/audio/D-Bus sockets are bound
+    # individually into /run/user/<uid>/ via display_socket_binds below.
 
     # If minimal mode is enabled, we only bind the bare systems (/dev, /proc, /sys)
     if minimal:
