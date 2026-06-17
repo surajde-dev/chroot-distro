@@ -196,20 +196,15 @@ def _upload_blob_bytes(
             raise RuntimeError(f"Blob upload failed for {digest}: HTTP {resp.status}")
 
 
-def _upload_blob_file(
-    repo: str,
-    digest: str,
-    file_path: str,
-    token: str,
-    registry: str = "",
-    label: str = "",
-) -> None:
-    """Upload a blob from *file_path* (streamed, POST + monolithic PUT)."""
-    base = registry_base_url(registry)
+def _auth_headers(token: str) -> dict[str, str]:
     headers = {**_ua()}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    return headers
 
+
+def _open_upload_session(base: str, repo: str, headers: dict[str, str]) -> str:
+    """POST a new blob upload session and return the upload URL."""
     post_req = urllib.request.Request(
         f"{base}/v2/{repo}/blobs/uploads/",
         data=b"",
@@ -218,12 +213,38 @@ def _upload_blob_file(
     )
     with auth_opener().open(post_req) as resp:
         location = resp.headers.get("Location", "")
-    put_url = _resolve_upload_url(base, location)
-    sep = "&" if "?" in put_url else "?"
-    put_url = f"{put_url}{sep}digest={urllib.parse.quote(digest, safe='')}"
+    return _resolve_upload_url(base, location)
 
-    size = os.path.getsize(file_path)
+
+def _range_end(range_header: str) -> int | None:
+    """Parse the end offset from a registry Range header like '0-1023'."""
+    if not range_header or "-" not in range_header:
+        return None
     try:
+        return int(range_header.rsplit("-", 1)[1])
+    except ValueError:
+        return None
+
+
+def _with_digest(url: str, digest: str) -> str:
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}digest={urllib.parse.quote(digest, safe='')}"
+
+
+def _upload_blob_monolithic(
+    base: str,
+    repo: str,
+    digest: str,
+    file_path: str,
+    headers: dict[str, str],
+    size: int,
+    label: str,
+) -> None:
+    """POST a session then send the whole blob in one PUT (retry-wrapped)."""
+
+    def _do() -> None:
+        upload_url = _open_upload_session(base, repo, headers)
+        put_url = _with_digest(upload_url, digest)
         with open(file_path, "rb") as fh:
             reader = _ProgressReader(fh, size, label or digest[:19])
             put_req = urllib.request.Request(
@@ -239,8 +260,124 @@ def _upload_blob_file(
             with auth_opener().open(put_req) as resp:
                 if not 200 <= resp.status < 300:
                     raise RuntimeError(f"Blob upload failed for {digest}: HTTP {resp.status}")
-    finally:
-        clear_bar()
+
+    _with_retry(_do, f"upload {label or digest[:19]}")
+
+
+def _upload_blob_chunked(
+    base: str,
+    repo: str,
+    digest: str,
+    file_path: str,
+    headers: dict[str, str],
+    size: int,
+    label: str,
+) -> None:
+    """Upload a blob in PATCH chunks, resuming on transient failure.
+
+    The registry acknowledges each PATCH with a new upload Location and a
+    Range header giving the last byte stored. On a transient failure the
+    session is reopened only if needed and the upload continues from the
+    acknowledged offset, so a dropped connection does not restart the
+    whole layer.
+    """
+    chunk_size = _push_chunk_size()
+    max_retries = _push_max_retries()
+    progress = _ProgressReader(typing.cast(typing.BinaryIO, None), size, label or digest[:19])
+
+    upload_url = _with_retry(lambda: _open_upload_session(base, repo, headers), f"open upload {label}")
+    offset = 0
+    attempt = 0
+
+    with open(file_path, "rb") as fh:
+        try:
+            while offset < size:
+                fh.seek(offset)
+                chunk = fh.read(chunk_size)
+                if not chunk:
+                    break
+                end = offset + len(chunk) - 1
+                patch_req = urllib.request.Request(
+                    upload_url,
+                    data=chunk,
+                    method="PATCH",
+                    headers={
+                        **headers,
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": str(len(chunk)),
+                        "Content-Range": f"{offset}-{end}",
+                    },
+                )
+                try:
+                    with auth_opener().open(patch_req) as resp:
+                        if not 200 <= resp.status < 300:
+                            raise RuntimeError(f"Chunk upload failed for {digest}: HTTP {resp.status}")
+                        next_url = resp.headers.get("Location", "")
+                        acked = _range_end(resp.headers.get("Range", ""))
+                except BaseException as exc:
+                    if not _is_retriable(exc) or attempt >= max_retries:
+                        raise
+                    attempt += 1
+                    delay = min(2**attempt, 30)
+                    log_info(
+                        f"{label or digest[:19]}: chunk at {offset} failed ({exc}); "
+                        f"retry {attempt}/{max_retries} in {delay}s..."
+                    )
+                    time.sleep(delay)
+                    continue
+                attempt = 0
+                if next_url:
+                    upload_url = _resolve_upload_url(base, next_url)
+                # Advance by what the registry acknowledged when available,
+                # else by the chunk we just sent.
+                offset = (acked + 1) if acked is not None and acked >= offset else (end + 1)
+                progress.sent = offset
+                progress._maybe_draw(final=False)
+
+            put_url = _with_digest(upload_url, digest)
+
+            def _finalize() -> None:
+                put_req = urllib.request.Request(
+                    put_url,
+                    data=b"",
+                    method="PUT",
+                    headers={**headers, "Content-Length": "0"},
+                )
+                with auth_opener().open(put_req) as resp:
+                    if not 200 <= resp.status < 300:
+                        raise RuntimeError(f"Blob finalize failed for {digest}: HTTP {resp.status}")
+
+            _with_retry(_finalize, f"finalize {label or digest[:19]}")
+            progress.sent = size
+            progress._maybe_draw(final=True)
+        finally:
+            clear_bar()
+
+
+def _upload_blob_file(
+    repo: str,
+    digest: str,
+    file_path: str,
+    token: str,
+    registry: str = "",
+    label: str = "",
+) -> None:
+    """Upload a blob from *file_path*.
+
+    Blobs at or above the configured chunk size are uploaded in chunks
+    (resumable); smaller blobs use a single retry-wrapped PUT.
+    """
+    base = registry_base_url(registry)
+    headers = _auth_headers(token)
+    size = os.path.getsize(file_path)
+
+    if size >= _push_chunk_size():
+        _upload_blob_chunked(base, repo, digest, file_path, headers, size, label)
+    else:
+        try:
+            _upload_blob_monolithic(base, repo, digest, file_path, headers, size, label)
+        finally:
+            clear_bar()
 
 
 def _put_manifest(
