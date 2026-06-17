@@ -255,20 +255,19 @@ def get_special_mounts(
             )
         )
 
-    # Fresh /run unless the user opted into display sharing, in which case
-    # the specific runtime sockets are bound on top of this tmpfs by
-    # get_bindings(). Either way the host's broad /run is never exposed.
-    if not shared_display:
-        specials.append(
-            SpecialMount(
-                fstype="tmpfs",
-                source="tmpfs",
-                target="/run",
-                options="mode=0755",
-                mkdir=True,
-                optional=True,
-            )
+    # Fresh /run in every mode. With --shared-display the specific runtime
+    # sockets are bound on top of this tmpfs by get_bindings(); the host's
+    # broad /run is never exposed.
+    specials.append(
+        SpecialMount(
+            fstype="tmpfs",
+            source="tmpfs",
+            target="/run",
+            options="mode=0755",
+            mkdir=True,
+            optional=True,
         )
+    )
 
     # PID-namespace-aware procfs (must not bind-mount host /proc when isolated).
     if isolated:
