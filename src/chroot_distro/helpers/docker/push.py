@@ -116,14 +116,17 @@ def _blob_exists(
     headers = {**_ua()}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, method="HEAD", headers=headers)
-    try:
-        with auth_opener().open(req) as resp:
-            return bool(200 <= resp.status < 300)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return False
-        raise
+    def _do() -> bool:
+        req = urllib.request.Request(url, method="HEAD", headers=headers)
+        try:
+            with auth_opener().open(req) as resp:
+                return bool(200 <= resp.status < 300)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return False
+            raise
+
+    return bool(_with_retry(_do, f"check {digest[:19]}"))
 
 
 class _ProgressReader:
@@ -187,19 +190,24 @@ def _upload_blob_bytes(
     put_url = _resolve_upload_url(base, location)
     sep = "&" if "?" in put_url else "?"
     put_url = f"{put_url}{sep}digest={urllib.parse.quote(digest, safe='')}"
-    put_req = urllib.request.Request(
-        put_url,
-        data=data,
-        method="PUT",
-        headers={
-            **headers,
-            "Content-Type": "application/octet-stream",
-            "Content-Length": str(len(data)),
-        },
-    )
-    with auth_opener().open(put_req) as resp:
-        if not 200 <= resp.status < 300:
-            raise RuntimeError(f"Blob upload failed for {digest}: HTTP {resp.status}")
+    def _do() -> None:
+        upload_url = _open_upload_session(base, repo, headers)
+        full_put_url = _with_digest(upload_url, digest)
+        put_req = urllib.request.Request(
+            full_put_url,
+            data=data,
+            method="PUT",
+            headers={
+                **headers,
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(data)),
+            },
+        )
+        with auth_opener().open(put_req) as resp:
+            if not 200 <= resp.status < 300:
+                raise RuntimeError(f"Blob upload failed for {digest}: HTTP {resp.status}")
+
+    _with_retry(_do, f"upload {digest[:19]}")
 
 
 def _auth_headers(token: str) -> dict[str, str]:
@@ -405,11 +413,15 @@ def _put_manifest(
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, data=body, method="PUT", headers=headers)
-    with auth_opener().open(req) as resp:
-        if not 200 <= resp.status < 300:
-            raise RuntimeError(f"Manifest upload failed: HTTP {resp.status}")
-        return str(resp.headers.get("Docker-Content-Digest", ""))
+
+    def _do() -> str:
+        req = urllib.request.Request(url, data=body, method="PUT", headers=headers)
+        with auth_opener().open(req) as resp:
+            if not 200 <= resp.status < 300:
+                raise RuntimeError(f"Manifest upload failed: HTTP {resp.status}")
+            return str(resp.headers.get("Docker-Content-Digest", ""))
+
+    return str(_with_retry(_do, "upload manifest"))
 
 
 def _strip_private_keys(d: dict[str, typing.Any]) -> dict[str, typing.Any]:
