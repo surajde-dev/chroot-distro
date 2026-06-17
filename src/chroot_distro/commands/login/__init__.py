@@ -63,6 +63,24 @@ from chroot_distro.paths import container_dir, container_rootfs
 log = logging.getLogger(__name__)
 
 
+def _safe_hostname(name: str) -> str:
+    """Return *name* if it is a safe hostname token, else "localhost".
+
+    Container names allow underscores (see names.is_valid_name), which are
+    not valid in hostnames and are rejected by some consuming tools. Accept
+    only alphanumerics, '-' and '.', with each dot-separated label at most
+    63 characters; otherwise fall back to a safe default.
+    """
+    if not name:
+        return "localhost"
+    for label in name.split("."):
+        if not label or len(label) > 63:
+            return "localhost"
+        if not all(ch.isalnum() or ch == "-" for ch in label):
+            return "localhost"
+    return name
+
+
 def _rootfs_has_script(rootfs: str) -> bool:
     """Return True if util-linux `script` is available inside the rootfs."""
     for guest_bin in ("/usr/bin/script", "/bin/script"):
@@ -191,7 +209,7 @@ def _resolve_login_user(rootfs: str, container_name: str, user_arg: str) -> dict
     }
 
 
-def _build_termux_env(rootfs, extra_env, minimal):
+def _build_termux_env(rootfs, extra_env, minimal, container_name=""):
     env: dict = {}
     termux_home_inner = TERMUX_HOME
     if not minimal:
@@ -202,6 +220,7 @@ def _build_termux_env(rootfs, extra_env, minimal):
         env["LANG"] = "en_US.UTF-8"
         env["ANDROID_DATA"] = "/data"
         env["ANDROID_ROOT"] = "/system"
+        env["HOSTNAME"] = _safe_hostname(container_name)
     for entry in extra_env:
         key, _, val = entry.partition("=")
         if key:
@@ -228,7 +247,7 @@ def _build_termux_env(rootfs, extra_env, minimal):
     return env
 
 
-def _build_normal_env(rootfs, container_path, login_user, login_home, extra_env, minimal, isolated):
+def _build_normal_env(rootfs, container_path, login_user, login_home, extra_env, minimal, isolated, container_name=""):
     env: dict = {}
 
     if minimal:
@@ -244,6 +263,7 @@ def _build_normal_env(rootfs, container_path, login_user, login_home, extra_env,
         return env
 
     env["PATH"] = DEFAULT_PATH_ENV
+    env["HOSTNAME"] = _safe_hostname(container_name)
     if IS_TERMUX:
         env["MOZ_FAKE_NO_SANDBOX"] = "1"
         env["PULSE_SERVER"] = "127.0.0.1"
