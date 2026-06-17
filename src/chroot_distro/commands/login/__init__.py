@@ -38,7 +38,10 @@ from chroot_distro.constants import (
     TERMUX_PREFIX,
 )
 from chroot_distro.helpers.android import ensure_data_suid, termux_home_owner_ids
-from chroot_distro.helpers.display import resolve_display_env
+from chroot_distro.helpers.display import (
+    resolve_display_env,
+    resolve_display_socket_binds,
+)
 from chroot_distro.helpers.namespace import NamespaceError
 from chroot_distro.helpers.nvidia import (
     detect_nvidia_gpu,
@@ -545,6 +548,9 @@ def _command_login_inner(container_name: str, args) -> None:
             if key not in user_env_keys:
                 child_env[key] = val
 
+        # Only the specific runtime sockets are bound, not the whole host /run.
+        display_socket_binds = resolve_display_socket_binds(child_env)
+
         x11_auth_binds = list(resolved_x11_binds)
         xauth = child_env.get("XAUTHORITY", "")
         bind_path = x11_auth_bind_path(xauth)
@@ -579,6 +585,7 @@ def _command_login_inner(container_name: str, args) -> None:
         shared_tmp=shared_tmp,
         shared_display=shared_display,
         display_auth_binds=x11_auth_binds,
+        display_socket_binds=display_socket_binds,
         custom_binds=custom_binds,
         login_home=login_home or "/root",
         login_user=login_user,
