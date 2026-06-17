@@ -14,6 +14,61 @@ from chroot_distro.helpers import nvidia as nvidia_helper
 log = logging.getLogger(__name__)
 
 
+def _split_bind_spec(spec: str) -> tuple[str, str, str]:
+    """Split a --bind spec into (host_src, guest_dst, options).
+
+    Accepted forms:
+      - ``/host``                       -> (/host, /host, "")
+      - ``/host:/guest``                -> (/host, /guest, "")
+      - ``/host:/guest:ro``             -> (/host, /guest, "ro")
+      - ``/host:/guest:ro,nosuid``      -> (/host, /guest, "ro,nosuid")
+
+    Only the first two colons are treated as field separators; everything
+    after the second colon is the options field (commas separate options).
+    """
+    parts = spec.split(":", 2)
+    if len(parts) == 1:
+        return parts[0], parts[0], ""
+    if len(parts) == 2:
+        return parts[0], parts[1], ""
+    return parts[0], parts[1], parts[2]
+
+
+def strip_bind_options(custom_binds: list[str] | None) -> list[str]:
+    """Return *custom_binds* as ``host:guest`` specs with options removed.
+
+    get_bindings() only understands ``host`` or ``host:guest`` and splits on
+    the first colon, so the third options field must be stripped before the
+    specs are passed to it.
+    """
+    if not custom_binds:
+        return []
+    stripped: list[str] = []
+    for spec in custom_binds:
+        src, dst, _opts = _split_bind_spec(spec)
+        stripped.append(f"{src}:{dst}" if dst != src else src)
+    return stripped
+
+
+def parse_bind_options(custom_binds: list[str] | None) -> dict[str, str]:
+    """Map normalized guest destination path -> mount options string.
+
+    Only entries that actually specify options are included. The guest path
+    is normalized to a leading-slash, no-trailing-slash form so it can be
+    matched against resolved bind targets by the caller.
+    """
+    options_map: dict[str, str] = {}
+    if not custom_binds:
+        return options_map
+    for spec in custom_binds:
+        _src, dst, opts = _split_bind_spec(spec)
+        if not opts:
+            continue
+        norm_dst = "/" + dst.strip("/")
+        options_map[norm_dst] = opts
+    return options_map
+
+
 @dataclass
 class SpecialMount:
     """
