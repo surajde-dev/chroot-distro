@@ -446,10 +446,10 @@ chroot-distro login ubuntu --get-chroot-cmd
 | `--isolated` | Reduce host exposure and enable namespace isolation (mount, PID, UTS, IPC via `unshare`/`nsenter`). On Termux: also skip Android system, storage, and `$PREFIX` binds unless you opt in with `--shared-*` or `--bind`. On Linux: skip default `/tmp` unless `--shared-tmp`. Mutually exclusive with `--minimal`. |
 | `--minimal` | Bare minimum chroot: core pseudo-filesystems only (`/dev`, `/proc`, `/sys`, plus `/run`, `/dev/pts`, `/dev/shm` when present). Stripped guest environment. Mutually exclusive with `--isolated`. |
 | `--shared-home` | Bind the invoking user's host home into the guest home (or `/root` for root). On Termux, binds `TERMUX_HOME`. |
-| `--shared-tmp` | Bind host tmp (`/tmp` on Linux, `$PREFIX/tmp` on Termux) to `/tmp` in the guest. On Linux, included by default unless `--isolated`. |
-| `--shared-display` | Share the host display server (X11 and Wayland), audio (PulseAudio/PipeWire), and D-Bus session bus with the container. Opt-in only. `--shared-x11` is accepted as a backward-compatible alias. |
+| `--shared-tmp` | Bind host tmp (`/tmp` on Linux, `$PREFIX/tmp` on Termux) to `/tmp` in the guest. Opt-in only: by default the container gets its own fresh `/tmp`, not the host's. |
+| `--shared-display` | Share the host display server (X11 and Wayland), audio (PulseAudio/PipeWire), and D-Bus session bus with the container. Binds only the specific session sockets, not the host's whole `/run`. Opt-in only. `--shared-x11` is accepted as a backward-compatible alias. |
 | `-b`, `--bind SRC[:DST]` | Bind-mount a custom host path (repeatable). `DST` must be an absolute guest path. |
-| `--hostname STRING` | Hostname inside the container (default: `localhost`). |
+| `--hostname STRING` | Hostname inside the container (default: the container name). |
 | `-w`, `--work-dir PATH` | Initial working directory (default: user's home). |
 | `-e`, `--env VAR=VALUE` | Set a guest environment variable (repeatable). |
 | `--get-chroot-cmd` | Print the fully assembled `env` + `chroot` command line and exit. |
@@ -457,6 +457,13 @@ chroot-distro login ubuntu --get-chroot-cmd
 #### Display sharing
 Display sharing is active when using `--shared-display` (or `--shared-x11` as a backward-compatible alias).
 > It work best on regular Linux and in Termux it doesn't have all the options
+
+By default the container is isolated from the host's runtime state: its
+`/tmp` and `/run` are fresh and empty, so host temp files and host runtime
+sockets (D-Bus, PulseAudio, etc.) do not leak in. `/proc`, `/sys`, `/dev`,
+and `/dev/pts` are still bound from the host for hardware/USB access.
+`--shared-display` is the only way to expose the GUI/audio/D-Bus sockets;
+it binds **only** the specific sockets needed, never the whole `/run`.
 
 Display sharing forwards four subsystems from the invoking host session into
 the container:
@@ -476,9 +483,16 @@ the container:
 - `WAYLAND_DISPLAY` is forwarded (fallback: `wayland-0` if socket exists).
 - `XDG_SESSION_TYPE`, `XDG_CURRENT_DESKTOP`, and `DESKTOP_SESSION` are
   forwarded from the host session.
-- Host `/run` is bind-mounted with **rslave** propagation so new Wayland
-  compositor sockets created after mount are immediately visible inside the
-  container.
+- The host's `XDG_RUNTIME_DIR` (`/run/user/<uid>`) is bind-mounted whole
+  with **rslave** propagation, so every session socket (Wayland,
+  PulseAudio, PipeWire, D-Bus) is exposed and sockets created after mount
+  stay visible — while the host's broad `/run` stays hidden. The system
+  D-Bus socket (`/run/dbus/system_bus_socket`) is bound individually.
+
+> Note: logging in as **root** with `--shared-display` cannot use the
+> session D-Bus bus (it rejects uid 0 with "Connection reset by peer");
+> log in as a UID-matched normal user with `--user` for a working session
+> bus. The system bus works for root.
 
 **Sound (PulseAudio / PipeWire)**
 - `PULSE_SERVER` is forwarded (fallback: `unix:/run/user/<uid>/pulse/native`
@@ -496,12 +510,16 @@ pseudo-filesystems. Home is never bind-mounted unless you pass `--shared-home`.
 #### GPU acceleration (auto-detected)
 
 Chroot-distro automatically enables hardware-accelerated GPU rendering at
-login if use **`--shared-display`**. (It doesn't work on Termux)
+login — **no flag needed**, same tier as USB and general hardware access.
+GPU passthrough is independent of `--shared-display`. (It doesn't work on
+Termux.)
 
 **AMD and Intel** (open-source Mesa drivers)
 - Works out of the box. Host `/dev` (including `/dev/dri/` render nodes) is
-  bind-mounted into the container. Guest Mesa drivers access GPU hardware
-  directly — no extra configuration needed.
+  bind-mounted into the container. The host's Vulkan/EGL/OpenCL ICD and
+  loader-config descriptors are bound read-only so the guest's own Mesa
+  stack can enumerate the hardware. Driver `.so` files are **not** bound:
+  shadowing the container's own Mesa libraries corrupts its loader.
 
 **NVIDIA — native Linux** (proprietary driver)
 - Detection: `/dev/nvidia0` exists, or `libcuda*.so*` / `libnvidia*.so*`
