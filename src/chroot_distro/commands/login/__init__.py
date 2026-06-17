@@ -779,15 +779,30 @@ def _command_login_inner(container_name: str, args) -> None:
             # Phase 3: NVIDIA ldconfig refresh
             if has_nvidia:
                 run_ldconfig_in_chroot(rootfs)
-        elif use_namespaces:
-            holder = namespace.get_live_holder(container_name)
-            if holder is None:
-                session.decrement(container_name, lock_fh=lock_fh)
-                crit_error(
-                    f"Namespace holder for '{container_name}' is not running. "
-                    f"Run '{PROGRAM_NAME} unmount {container_name}' and try again."
+        else:
+            # Not the first session: bind mounts are NOT re-applied, so any
+            # mount-affecting flag passed now is silently ignored because the
+            # container is already mounted from an earlier login. Warn so the
+            # user knows to unmount first (e.g. --shared-display added after a
+            # plain login -> no display/audio/D-Bus sockets, Wayland and
+            # notify-send fail to connect).
+            if shared_display or shared_tmp or use_shared_home or custom_binds:
+                warn(
+                    f"Container '{container_name}' is already mounted from an "
+                    f"earlier session; mount options (--shared-display, "
+                    f"--shared-tmp, --shared-home, --bind) are ignored for this "
+                    f"login. Run '{PROGRAM_NAME} unmount {container_name}' and "
+                    f"log in again to apply them."
                 )
-                sys.exit(1)
+            if use_namespaces:
+                holder = namespace.get_live_holder(container_name)
+                if holder is None:
+                    session.decrement(container_name, lock_fh=lock_fh)
+                    crit_error(
+                        f"Namespace holder for '{container_name}' is not running. "
+                        f"Run '{PROGRAM_NAME} unmount {container_name}' and try again."
+                    )
+                    sys.exit(1)
 
     # On Termux, Android's /dev/pts nodes use device major 88 while live ptys
     # use major 136, so the inherited login pty has no matching /dev/pts entry
