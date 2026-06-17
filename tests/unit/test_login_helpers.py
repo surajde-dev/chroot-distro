@@ -1,8 +1,27 @@
 import os
 from unittest.mock import patch
 
+from chroot_distro.commands.login import _safe_hostname
 from chroot_distro.commands.login.chroot_cmd import build_chroot_args
 from chroot_distro.commands.login.env import resolve_term
+
+
+def test_safe_hostname_valid_tokens():
+    assert _safe_hostname("alpine") == "alpine"
+    assert _safe_hostname("web-01") == "web-01"
+    assert _safe_hostname("a.b.c") == "a.b.c"
+
+
+def test_safe_hostname_rejects_underscore_and_empty():
+    # underscores are valid container names but not safe hostnames
+    assert _safe_hostname("my_box") == "localhost"
+    assert _safe_hostname("") == "localhost"
+
+
+def test_safe_hostname_rejects_overlong_label():
+    assert _safe_hostname("a" * 64) == "localhost"
+    # each label must be <= 63 even if the whole string is longer
+    assert _safe_hostname("ok." + "b" * 64) == "localhost"
 
 
 def test_resolve_term_empty():
