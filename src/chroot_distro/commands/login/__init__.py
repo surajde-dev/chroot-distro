@@ -44,6 +44,7 @@ from chroot_distro.helpers.display import (
     resolve_display_socket_binds,
 )
 from chroot_distro.helpers.namespace import NamespaceError
+from chroot_distro.helpers.rootfs import ensure_hosts_entry
 from chroot_distro.helpers.nvidia import (
     detect_nvidia_gpu,
     nvidia_env_vars,
@@ -355,6 +356,17 @@ def _command_login_inner(container_name: str, args) -> None:
     # Effective hostname: explicit --hostname wins, else the container name.
     # Sanitised to a valid hostname token by the env builders / UTS setter.
     hostname_arg = getattr(args, "hostname", None) or container_name
+
+    # sudo and friends reverse-resolve the running hostname; ensure guest
+    # /etc/hosts maps both the effective container hostname (seen under
+    # --isolated) and the live kernel UTS name (seen without --isolated) to
+    # 127.0.0.1, so they do not fail with "unable to resolve host <name>".
+    if not minimal:
+        try:
+            live_nodename = os.uname().nodename
+        except OSError:
+            live_nodename = ""
+        ensure_hosts_entry(rootfs, _safe_hostname(hostname_arg), live_nodename)
     raw_custom_binds = getattr(args, "bind", []) or []
     # The third ":options" field (e.g. ro) is parsed out here; get_bindings
     # only understands host:guest specs.
