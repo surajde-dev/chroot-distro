@@ -374,15 +374,11 @@ def _command_login_inner(container_name: str, args) -> None:
         existing_guest = {"/" + dst.strip("/") for dst in bind_options_map} | {
             "/" + bindings._split_bind_spec(spec)[1].strip("/") for spec in raw_custom_binds
         }
-        icd_binds = list(gpu_helper.find_gpu_icd_binds(rootfs))
-        # AMD/Intel: when there is no NVIDIA stack but a DRM device exists,
-        # also fill in the host's Mesa/Vulkan userspace driver libraries so
-        # GPU acceleration works without --shared-display. NVIDIA hosts get
-        # their full userspace stack via get_nvidia_integration() instead, so
-        # the two paths stay mutually exclusive.
-        if not has_nvidia and os.path.isdir("/dev/dri"):
-            icd_binds.extend(gpu_helper.find_mesa_libraries(rootfs))
-        for src, dst in icd_binds:
+        # AMD/Intel: bind only the host's ICD / loader-config descriptors so
+        # the container's own Mesa stack can enumerate /dev/dri. The driver
+        # .so files are intentionally NOT bound: shadowing a container's own
+        # apt/dpkg-managed Mesa libraries corrupts its loader.
+        for src, dst in gpu_helper.find_gpu_icd_binds(rootfs):
             norm_dst = "/" + dst.strip("/")
             if norm_dst in existing_guest:
                 continue
@@ -760,8 +756,6 @@ def _command_login_inner(container_name: str, args) -> None:
                     enable_binfmt=not minimal,
                     enable_docker_cgroup=not minimal,
                     enable_shm=not minimal,
-                    shared_tmp=shared_tmp,
-                    shared_display=shared_display,
                 )
                 for sm in specials:
                     mount_manager.apply_special_mount(rootfs, sm, holder=holder)
