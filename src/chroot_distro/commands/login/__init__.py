@@ -385,7 +385,7 @@ def _command_login_inner(container_name: str, args) -> None:
     if dist_type == "termux":
         if not login_wd:
             login_wd = TERMUX_HOME
-        child_env = _build_termux_env(rootfs, extra_env, minimal)
+        child_env = _build_termux_env(rootfs, extra_env, minimal, container_name=container_name)
 
         if run_inner is not None:
             inner = run_inner
@@ -519,6 +519,7 @@ def _command_login_inner(container_name: str, args) -> None:
             extra_env,
             minimal,
             isolated,
+            container_name=container_name,
         )
 
         if run_inner is not None:
@@ -666,6 +667,10 @@ def _command_login_inner(container_name: str, args) -> None:
                         # set it explicitly is benign. Keep it out of the
                         # user-facing output to avoid alarming warnings.
                         log.debug("Could not set mount propagation to private in isolated namespace.")
+                    # Give the isolated UTS namespace its own hostname so
+                    # `uname -n` reflects the container name. Cosmetic only:
+                    # never fail the login if no hostname binary exists.
+                    namespace.set_namespace_hostname(holder, _safe_hostname(container_name))
                 except NamespaceError as exc:
                     session.decrement(container_name, lock_fh=lock_fh)
                     crit_error(str(exc))
