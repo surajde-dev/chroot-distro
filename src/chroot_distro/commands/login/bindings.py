@@ -225,49 +225,18 @@ def get_special_mounts(
     enable_binfmt: bool = True,
     enable_docker_cgroup: bool = True,  # enabled by default per user request
     enable_shm: bool = True,
-    shared_tmp: bool = False,
-    shared_display: bool = False,
 ) -> list[SpecialMount]:
     """Return list of special filesystem mounts to apply after bind mounts.
 
     Caller is responsible for actually running them via apply_special_mount().
 
-    /tmp and /run default to fresh, per-container tmpfs filesystems so the
-    container cannot see (or pollute) the host's temp files and runtime
-    sockets. They are bound from the host only when the matching opt-in flag
-    is set: --shared-tmp for /tmp, --shared-display for /run (the latter via
-    specific socket binds, see get_bindings()). When tmpfs is unavailable the
-    mount is optional, so apply_special_mount() still leaves an empty target
-    directory behind instead of a host-shared one.
+    Note on /tmp and /run isolation: these are NOT bind-mounted from the
+    host by default (see get_bindings()), so the container falls back to its
+    own empty, writable /tmp and /run directories. No tmpfs overmount is
+    used here because it would mount on top of the display socket and
+    /tmp/.X11-unix binds applied earlier, hiding them.
     """
     specials: list[SpecialMount] = []
-
-    # Fresh /tmp unless the user opted into sharing the host's /tmp.
-    if not shared_tmp:
-        specials.append(
-            SpecialMount(
-                fstype="tmpfs",
-                source="tmpfs",
-                target="/tmp",
-                options="mode=1777",
-                mkdir=True,
-                optional=True,
-            )
-        )
-
-    # Fresh /run in every mode. With --shared-display the specific runtime
-    # sockets are bound on top of this tmpfs by get_bindings(); the host's
-    # broad /run is never exposed.
-    specials.append(
-        SpecialMount(
-            fstype="tmpfs",
-            source="tmpfs",
-            target="/run",
-            options="mode=0755",
-            mkdir=True,
-            optional=True,
-        )
-    )
 
     # PID-namespace-aware procfs (must not bind-mount host /proc when isolated).
     if isolated:
