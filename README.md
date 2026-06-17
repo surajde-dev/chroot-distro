@@ -443,7 +443,7 @@ chroot-distro login ubuntu --get-chroot-cmd
 | Option | Description |
 |---|---|
 | `-u`, `--user USER` | Log in as USER (default: `root`). Accepts `name`, numeric `uid`, `name:group`, or `uid:gid`. |
-| `--isolated` | Reduce host exposure and enable namespace isolation (mount, PID, UTS, IPC via `unshare`/`nsenter`). On Termux: also skip Android system, storage, and `$PREFIX` binds unless you opt in with `--shared-*` or `--bind`. On Linux: skip default `/tmp` unless `--shared-tmp`. Mutually exclusive with `--minimal`. |
+| `--isolated` | Reduce host exposure and enable namespace isolation (mount, PID, UTS, IPC via `unshare`/`nsenter`). On Termux: also skip Android system, storage, and `$PREFIX` binds unless you opt in with `--shared-*` or `--bind`. (Fresh `/tmp` and `/run` are the default in every mode now, not just `--isolated`.) Mutually exclusive with `--minimal`. |
 | `--minimal` | Bare minimum chroot: core pseudo-filesystems only (`/dev`, `/proc`, `/sys`, plus `/run`, `/dev/pts`, `/dev/shm` when present). Stripped guest environment. Mutually exclusive with `--isolated`. |
 | `--shared-home` | Bind the invoking user's host home into the guest home (or `/root` for root). On Termux, binds `TERMUX_HOME`. |
 | `--shared-tmp` | Bind host tmp (`/tmp` on Linux, `$PREFIX/tmp` on Termux) to `/tmp` in the guest. Opt-in only: by default the container gets its own fresh `/tmp`, not the host's. |
@@ -1149,6 +1149,12 @@ overridden from `manifest.json` image `Env`, but can be overridden with
 | `DESKTOP_SESSION` | Host `$DESKTOP_SESSION` (no fallback) |
 | `PULSE_SERVER` | Host `$PULSE_SERVER`; fallback `unix:/run/user/<uid>/pulse/native` if socket exists |
 | `DBUS_SESSION_BUS_ADDRESS` | Host `$DBUS_SESSION_BUS_ADDRESS`; fallback `unix:path=/run/user/<uid>/bus` if socket exists |
+
+**Hostname (always set, non-minimal):**
+
+| Variable | Source / Fallback |
+|---|---|
+| `HOSTNAME` | `--hostname` value; fallback the container name. Under `--isolated` the UTS namespace hostname is also set so `hostname`/`uname -n` report it. |
 
 **GPU — NVIDIA native Linux (auto-detected, non-minimal):**
 
