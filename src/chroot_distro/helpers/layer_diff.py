@@ -251,7 +251,11 @@ def diff_against_baseline(
             continue
         live_kind = live_fp[0]
         base_kind = base_fp[0]
-        if live_kind != base_kind or (live_kind == "file" and live_fp[1] != base_fp[1]) or (live_kind == "symlink" and live_fp[1] != base_fp[1]):
+        if (
+            live_kind != base_kind
+            or (live_kind == "file" and live_fp[1] != base_fp[1])
+            or (live_kind == "symlink" and live_fp[1] != base_fp[1])
+        ):
             modified.append(path)
     deleted = [k for k in baseline if k not in live]
     return sorted(added), sorted(modified), sorted(deleted)

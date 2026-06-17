@@ -44,12 +44,12 @@ from chroot_distro.helpers.display import (
     resolve_display_socket_binds,
 )
 from chroot_distro.helpers.namespace import NamespaceError
-from chroot_distro.helpers.rootfs import ensure_hosts_entry
 from chroot_distro.helpers.nvidia import (
     detect_nvidia_gpu,
     nvidia_env_vars,
     run_ldconfig_in_chroot,
 )
+from chroot_distro.helpers.rootfs import ensure_hosts_entry
 from chroot_distro.helpers.x11 import (
     guest_can_read_auth,
     provision_guest_xauthority,

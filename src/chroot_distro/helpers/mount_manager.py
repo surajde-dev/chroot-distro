@@ -125,8 +125,8 @@ _NON_KERNEL_BIND_OPTIONS = frozenset({"z", "Z"})
 def _filter_bind_options(options: str) -> str:
     """Return *options* with non-kernel relabel flags (z/Z) removed."""
     kept: list[str] = []
-    for opt in options.split(","):
-        opt = opt.strip()
+    for raw_opt in options.split(","):
+        opt = raw_opt.strip()
         if not opt:
             continue
         if opt in _NON_KERNEL_BIND_OPTIONS:

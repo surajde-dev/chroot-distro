@@ -451,9 +451,7 @@ def _create_holder(container_name: str, flags: list[str]) -> NamespaceHolder:
                     "restrict this. Run without --isolate, or check that "
                     "'unshare --pid --mount --uts --ipc --fork sleep infinity' works."
                 )
-            raise NamespaceError(
-                "Failed to locate namespace holder process (sleep infinity) on the host."
-            )
+            raise NamespaceError("Failed to locate namespace holder process (sleep infinity) on the host.")
 
         if _proc_comm(host_pid) != "sleep":
             raise NamespaceError(f"Namespace holder PID {host_pid} is not a sleep process.")

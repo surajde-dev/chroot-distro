@@ -36,7 +36,6 @@ from chroot_distro.progress import (
     fmt_size,
 )
 
-
 # Default chunk size for chunked blob uploads (10 MiB). Overridable via
 # CD_PUSH_CHUNK_SIZE (bytes). Layers at or above this size are uploaded in
 # chunks; smaller blobs use the monolithic PUT path.
@@ -116,6 +115,7 @@ def _blob_exists(
     headers = {**_ua()}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+
     def _do() -> bool:
         req = urllib.request.Request(url, method="HEAD", headers=headers)
         try:

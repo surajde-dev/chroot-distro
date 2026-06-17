@@ -204,6 +204,7 @@ def download_blob(
                         local_abort.set()
                         live_responses.close_all()
                         raise KeyboardInterrupt
+
                     with contextlib.suppress(ValueError):
                         signal.signal(signal.SIGINT, _on_sigint)
                     pool = ThreadPoolExecutor(max_workers=len(segments))

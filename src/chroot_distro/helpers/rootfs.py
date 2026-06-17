@@ -141,9 +141,8 @@ def ensure_hosts_entry(rootfs: str, *hostnames: str) -> None:
     suffix = ("" if existing.endswith("\n") or not existing else "\n") + "".join(
         f"127.0.0.1   {h}\n" for h in to_add
     )
-    with contextlib.suppress(OSError):
-        with open(path, "a") as fh:
-            fh.write(suffix)
+    with contextlib.suppress(OSError), open(path, "a") as fh:
+        fh.write(suffix)
 
 
 def register_android_ids(rootfs: str) -> None:
