@@ -37,6 +37,7 @@ from chroot_distro.constants import (
     TERMUX_HOME,
     TERMUX_PREFIX,
 )
+from chroot_distro.helpers import gpu as gpu_helper
 from chroot_distro.helpers.android import ensure_data_suid, termux_home_owner_ids
 from chroot_distro.helpers.display import (
     resolve_display_env,
@@ -344,6 +345,22 @@ def _command_login_inner(container_name: str, args) -> None:
     has_nvidia = False
     if not IS_TERMUX and not minimal:
         has_nvidia = detect_nvidia_gpu()
+
+    # AMD/Intel/Mesa GPUs work via the /dev bind, but the container needs the
+    # host's Vulkan/EGL/OpenCL ICD descriptors to enumerate the GPU. Bind
+    # those config dirs read-only, unless the user already bound the same
+    # guest path explicitly.
+    if not IS_TERMUX and not minimal:
+        existing_guest = {"/" + dst.strip("/") for dst in bind_options_map} | {
+            "/" + bindings._split_bind_spec(spec)[1].strip("/") for spec in raw_custom_binds
+        }
+        for src, dst in gpu_helper.find_gpu_icd_binds(rootfs):
+            norm_dst = "/" + dst.strip("/")
+            if norm_dst in existing_guest:
+                continue
+            custom_binds.append(f"{src}:{dst}")
+            bind_options_map[norm_dst] = "ro"
+            existing_guest.add(norm_dst)
 
     if dist_type == "termux":
         if not login_wd:
