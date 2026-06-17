@@ -111,6 +111,58 @@ def test_probe_unshare_flags_fails_without_mount(mock_run):
         ns.probe_unshare_flags()
 
 
+@patch("chroot_distro.helpers.namespace._resolve_unshare", return_value="unshare")
+@patch("chroot_distro.helpers.namespace.subprocess.run")
+def test_probe_namespace_support_all_present(mock_run, _unshare):
+    mock_run.return_value = MagicMock(returncode=0)
+    assert ns.probe_namespace_support() == []
+
+
+@patch("chroot_distro.helpers.namespace._resolve_unshare", return_value="unshare")
+@patch("chroot_distro.helpers.namespace.subprocess.run")
+def test_probe_namespace_support_reports_missing(mock_run, _unshare):
+    def side_effect(cmd, **kwargs):
+        flag = cmd[1]
+        # everything supported except --mount
+        return MagicMock(returncode=1 if flag == "--mount" else 0)
+
+    mock_run.side_effect = side_effect
+    missing = ns.probe_namespace_support()
+    assert missing == ["--mount"]
+
+
+@patch("chroot_distro.helpers.namespace._resolve_unshare", side_effect=ns.NamespaceError("no unshare"))
+def test_probe_namespace_support_no_unshare_reports_all(_unshare):
+    assert ns.probe_namespace_support() == list(ns._PROBE_FLAGS)
+
+
+def test_set_namespace_hostname_skips_without_uts():
+    holder = MagicMock(container_name="alpine")
+    with patch.object(ns, "_read_holder_flags", return_value=["--mount", "--pid"]):
+        assert ns.set_namespace_hostname(holder, "alpine") is False
+    holder.run.assert_not_called()
+
+
+def test_set_namespace_hostname_uses_hostname_binary():
+    holder = MagicMock(container_name="alpine")
+    holder.run.return_value = MagicMock(returncode=0, stderr="")
+    with patch.object(ns, "_read_holder_flags", return_value=["--mount", "--uts"]):
+        assert ns.set_namespace_hostname(holder, "alpine") is True
+    assert holder.run.call_args_list[0].args[0] == ["hostname", "alpine"]
+
+
+def test_set_namespace_hostname_falls_back_to_proc():
+    holder = MagicMock(container_name="alpine")
+
+    def run(cmd, **kwargs):
+        rc = 0 if cmd[0] == "sh" else 1
+        return MagicMock(returncode=rc, stderr="not found")
+
+    holder.run.side_effect = run
+    with patch.object(ns, "_read_holder_flags", return_value=["--uts"]):
+        assert ns.set_namespace_hostname(holder, "alpine") is True
+
+
 def test_make_mount_private_falls_back_when_rprivate_rejected():
     """Android kernels reject --make-rprivate /; fall back to --make-private."""
     holder = MagicMock()
