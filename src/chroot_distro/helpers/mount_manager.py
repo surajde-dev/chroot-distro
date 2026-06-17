@@ -115,15 +115,42 @@ def _run_mount_cmd(cmd: list[str], holder: NamespaceHolder | None) -> subprocess
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
+# Mount options accepted in a --bind spec that are not kernel mount(2)
+# options and must not be passed to `mount -o`. `z`/`Z` are Docker/Podman
+# SELinux relabel hints; a plain chroot has no label context to apply them,
+# so they are silently dropped (with a debug note).
+_NON_KERNEL_BIND_OPTIONS = frozenset({"z", "Z"})
+
+
+def _filter_bind_options(options: str) -> str:
+    """Return *options* with non-kernel relabel flags (z/Z) removed."""
+    kept: list[str] = []
+    for opt in options.split(","):
+        opt = opt.strip()
+        if not opt:
+            continue
+        if opt in _NON_KERNEL_BIND_OPTIONS:
+            log.debug("Ignoring SELinux relabel bind option '%s' (no label context in chroot)", opt)
+            continue
+        kept.append(opt)
+    return ",".join(kept)
+
+
 def safe_mount(
     source: str,
     target: str,
     holder: NamespaceHolder | None = None,
     recursive: bool = False,
+    options: str = "",
 ) -> None:
     """Safely mount source to target using bind mount.
 
     Creates target directory or file if they do not exist.
+
+    When *options* is given (e.g. ``"ro"`` or ``"ro,nosuid"``), a second
+    ``mount -o remount,bind,<options>`` is issued after the initial bind:
+    the kernel ignores per-mount flags like ``ro`` on the first bind, so a
+    remount is required to actually apply them (matches util-linux).
     """
     source_abs = os.path.realpath(source)
     if not os.path.exists(source_abs):
@@ -152,6 +179,27 @@ def safe_mount(
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip() if hasattr(e, "stderr") else ""
         raise MountError(f"Failed to mount {source} to {target}: {stderr}") from e
+
+    kernel_options = _filter_bind_options(options)
+    if not kernel_options:
+        return
+
+    remount_flags = "remount,bind"
+    if recursive:
+        remount_flags = "remount,rbind"
+    try:
+        remount_cmd = [_resolve_mount(), "-o", f"{remount_flags},{kernel_options}", target]
+        result = _run_mount_cmd(remount_cmd, holder)
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                result.args,
+                result.stdout,
+                result.stderr,
+            )
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip() if hasattr(e, "stderr") else ""
+        raise MountError(f"Failed to apply mount options '{kernel_options}' to {target}: {stderr}") from e
 
 
 def make_rslave(target: str, holder: NamespaceHolder | None = None) -> bool:
