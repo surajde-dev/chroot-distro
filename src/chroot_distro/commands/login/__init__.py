@@ -12,6 +12,7 @@ import chroot_distro.helpers.session as session
 from chroot_distro.commands.login import bindings
 from chroot_distro.commands.login.chroot_cmd import build_chroot_args
 from chroot_distro.commands.login.env import (
+    ANDROID_HOST_ENV_VARS,
     IMAGE_ENV_BLOCKED,
     inject_termux_profile,
     read_manifest_env,
@@ -34,6 +35,7 @@ from chroot_distro.constants import (
     DEFAULT_PATH_ENV,
     IS_TERMUX,
     PROGRAM_NAME,
+    TERMUX_APP_PACKAGE,
     TERMUX_HOME,
     TERMUX_PREFIX,
 )
@@ -210,11 +212,10 @@ def _resolve_login_user(rootfs: str, container_name: str, user_arg: str) -> dict
     }
 
 
-def _build_termux_env(rootfs, extra_env, minimal, container_name=""):
+def _build_termux_env(rootfs, container_path, extra_env, minimal, isolated, container_name=""):
     env: dict = {}
-    termux_home_inner = TERMUX_HOME
     if not minimal:
-        env["HOME"] = termux_home_inner
+        env["HOME"] = TERMUX_HOME
         env["PATH"] = f"{TERMUX_PREFIX}/bin"
         env["PREFIX"] = TERMUX_PREFIX
         env["TMPDIR"] = f"{TERMUX_PREFIX}/tmp"
@@ -222,6 +223,21 @@ def _build_termux_env(rootfs, extra_env, minimal, container_name=""):
         env["ANDROID_DATA"] = "/data"
         env["ANDROID_ROOT"] = "/system"
         env["HOSTNAME"] = _safe_hostname(container_name)
+
+    # Image manifest Env applies in every mode (including isolated and minimal).
+    for entry in read_manifest_env(container_path):
+        key, _, val = entry.partition("=")
+        if key and key not in IMAGE_ENV_BLOCKED:
+            env[key] = val
+
+    # Android system vars are inherited from the host only in the default
+    # mode; isolated and minimal sessions keep just the image's values.
+    if IS_TERMUX and not isolated and not minimal:
+        for var in ANDROID_HOST_ENV_VARS:
+            val = os.environ.get(var, "")
+            if val:
+                env[var] = val
+
     for entry in extra_env:
         key, _, val = entry.partition("=")
         if key:
@@ -251,41 +267,23 @@ def _build_termux_env(rootfs, extra_env, minimal, container_name=""):
 def _build_normal_env(rootfs, container_path, login_user, login_home, extra_env, minimal, isolated, container_name=""):
     env: dict = {}
 
-    if minimal:
-        for entry in extra_env:
-            key, _, val = entry.partition("=")
-            if key:
-                env[key] = val
-        host_term = env.get("TERM") or os.environ.get("TERM", "")
-        env["TERM"] = resolve_term(rootfs, host_term)
-        host_colorterm = os.environ.get("COLORTERM", "")
-        if host_colorterm:
-            env["COLORTERM"] = host_colorterm
-        return env
+    if not minimal:
+        env["PATH"] = DEFAULT_PATH_ENV
+        env["HOSTNAME"] = _safe_hostname(container_name)
+        if IS_TERMUX:
+            env["MOZ_FAKE_NO_SANDBOX"] = "1"
+            env["PULSE_SERVER"] = "127.0.0.1"
 
-    env["PATH"] = DEFAULT_PATH_ENV
-    env["HOSTNAME"] = _safe_hostname(container_name)
-    if IS_TERMUX:
-        env["MOZ_FAKE_NO_SANDBOX"] = "1"
-        env["PULSE_SERVER"] = "127.0.0.1"
-
+    # Image manifest Env applies in every mode (including isolated and minimal).
     for entry in read_manifest_env(container_path):
         key, _, val = entry.partition("=")
         if key and key not in IMAGE_ENV_BLOCKED:
             env[key] = val
 
-    if IS_TERMUX and not isolated:
-        for var in (
-            "ANDROID_ART_ROOT",
-            "ANDROID_DATA",
-            "ANDROID_I18N_ROOT",
-            "ANDROID_ROOT",
-            "ANDROID_RUNTIME_ROOT",
-            "ANDROID_TZDATA_ROOT",
-            "BOOTCLASSPATH",
-            "DEX2OATBOOTCLASSPATH",
-            "EXTERNAL_STORAGE",
-        ):
+    # Android system vars are inherited from the host only in the default
+    # mode; isolated and minimal sessions keep just the image's values.
+    if IS_TERMUX and not isolated and not minimal:
+        for var in ANDROID_HOST_ENV_VARS:
             val = os.environ.get(var, "")
             if val:
                 env[var] = val
@@ -295,8 +293,9 @@ def _build_normal_env(rootfs, container_path, login_user, login_home, extra_env,
         if key:
             env[key] = val
 
-    env["HOME"] = login_home
-    env["USER"] = login_user
+    if not minimal:
+        env["HOME"] = login_home
+        env["USER"] = login_user
     host_term = env.get("TERM") or os.environ.get("TERM", "")
     env["TERM"] = resolve_term(rootfs, host_term)
     host_colorterm = os.environ.get("COLORTERM", "")
@@ -404,7 +403,22 @@ def _command_login_inner(container_name: str, args) -> None:
     if dist_type == "termux":
         if not login_wd:
             login_wd = TERMUX_HOME
-        child_env = _build_termux_env(rootfs, extra_env, minimal, container_name=hostname_arg)
+        child_env = _build_termux_env(
+            rootfs,
+            container_path,
+            extra_env,
+            minimal,
+            isolated,
+            container_name=hostname_arg,
+        )
+
+        # A termux-type guest still needs its own cache dir to exist; create
+        # it inside the rootfs (never bound from the host).
+        if IS_TERMUX and not isolated:
+            os.makedirs(
+                os.path.join(rootfs, "data", "data", TERMUX_APP_PACKAGE, "cache"),
+                exist_ok=True,
+            )
 
         if run_inner is not None:
             inner = run_inner

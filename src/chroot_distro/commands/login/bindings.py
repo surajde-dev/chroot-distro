@@ -305,8 +305,12 @@ def get_special_mounts(
     return specials
 
 
-def android_data_bindings() -> list[tuple[str, str]]:
-    """Return list of (source, target) tuples for Android data paths (dalvik cache, app directories, etc.)."""
+def dalvik_cache_bindings() -> list[tuple[str, str]]:
+    """Return list of (source, target) tuples for host Android Dalvik/ART caches.
+
+    These are Android-system caches, not the Termux app's private data,
+    so both normal-type and termux-type guests get them.
+    """
     binds: list[tuple[str, str]] = []
     if not IS_TERMUX:
         return binds
@@ -326,6 +330,18 @@ def android_data_bindings() -> list[tuple[str, str]]:
             mode = oct(os.stat(real).st_mode)[-1]
             if mode in ("1", "5", "7"):
                 binds.append((real, real))
+    return binds
+
+
+def termux_app_bindings() -> list[tuple[str, str]]:
+    """Return list of (source, target) tuples for Termux app private directories.
+
+    Normal-type containers only: a termux-type guest must not see the
+    host's /data/data/com.termux, so this is never called for it.
+    """
+    binds: list[tuple[str, str]] = []
+    if not IS_TERMUX:
+        return binds
 
     apps_dir = f"/data/data/{TERMUX_APP_PACKAGE}/files/apps"
     if os.path.isdir(apps_dir):
@@ -463,19 +479,28 @@ def get_bindings(
 
     # 2. Android-specific bindings (system and storage)
     if IS_TERMUX and not isolated:
-        if dist_type != "termux" and os.path.isdir("/data"):
-            binds.append(("/data", "/data"))
+        # Dalvik/ART caches and shared storage are host-domain Android
+        # paths bound for both distro types in the default mode.
+        for src, dst in dalvik_cache_bindings():
+            binds.append((src, dst))
+        for src, dst in storage_bindings():
+            binds.append((src, dst))
+
+        # Android system directories (/apex, /system, /vendor, …). Bound only for normal-type.
         if dist_type != "termux":
             for src, dst in system_bindings():
                 binds.append((src, dst))
-        for src, dst in storage_bindings():
-            binds.append((src, dst))
-        for src, dst in android_data_bindings():
-            if dist_type == "termux" and dst.endswith("/cache"):
-                continue
-            binds.append((src, dst))
-        if dist_type != "termux" and os.path.exists(TERMUX_PREFIX):
-            binds.append((TERMUX_PREFIX, TERMUX_PREFIX))
+
+        # The Termux app's private dirs and host /data / TERMUX_PREFIX bridge
+        # are bound only for normal-type containers. A termux-type guest ships
+        # its own /data/data/com.termux and must never see the host's.
+        if dist_type != "termux":
+            if os.path.isdir("/data"):
+                binds.append(("/data", "/data"))
+            if os.path.exists(TERMUX_PREFIX):
+                binds.append((TERMUX_PREFIX, TERMUX_PREFIX))
+            for src, dst in termux_app_bindings():
+                binds.append((src, dst))
 
     # 3. Shared Home Directory
     # Only when --shared-home is set (matches proot-distro).

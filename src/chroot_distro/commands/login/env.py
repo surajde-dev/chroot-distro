@@ -24,6 +24,19 @@ _SENSITIVE_ENV_KEYS = frozenset(
 )
 
 
+ANDROID_HOST_ENV_VARS = (
+    "ANDROID_ART_ROOT",
+    "ANDROID_DATA",
+    "ANDROID_I18N_ROOT",
+    "ANDROID_ROOT",
+    "ANDROID_RUNTIME_ROOT",
+    "ANDROID_TZDATA_ROOT",
+    "BOOTCLASSPATH",
+    "DEX2OATBOOTCLASSPATH",
+    "EXTERNAL_STORAGE",
+)
+
+
 # Vars the image Env must not override.
 IMAGE_ENV_BLOCKED = frozenset(
     {

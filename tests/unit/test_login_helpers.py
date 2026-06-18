@@ -237,7 +237,8 @@ def test_get_bindings_home_sharing():
         patch("chroot_distro.commands.login.bindings.TERMUX_HOME", termux_home),
         patch("chroot_distro.commands.login.bindings.system_bindings", return_value=[]),
         patch("chroot_distro.commands.login.bindings.storage_bindings", return_value=[]),
-        patch("chroot_distro.commands.login.bindings.android_data_bindings", return_value=[]),
+        patch("chroot_distro.commands.login.bindings.dalvik_cache_bindings", return_value=[]),
+        patch("chroot_distro.commands.login.bindings.termux_app_bindings", return_value=[]),
         patch("chroot_distro.commands.login.bindings.TERMUX_PREFIX", "/data/data/com.termux/files/usr"),
     ):
         binds, _ = get_bindings(
@@ -258,8 +259,10 @@ def test_build_termux_env_scrubs_linker_preloads():
 
     env = _build_termux_env(
         "/fake/rootfs",
+        "/fake/container",
         ["LD_PRELOAD=/host/libtermux-exec.so", "LD_LIBRARY_PATH=/host/lib", "FOO=bar"],
         minimal=False,
+        isolated=False,
     )
     assert "LD_PRELOAD" not in env
     assert "LD_LIBRARY_PATH" not in env
@@ -274,8 +277,10 @@ def test_build_termux_env_minimal_still_scrubs_preloads():
 
     env = _build_termux_env(
         "/fake/rootfs",
+        "/fake/container",
         ["LD_PRELOAD=/host/libtermux-exec.so"],
         minimal=True,
+        isolated=False,
     )
     assert "LD_PRELOAD" not in env
     # minimal mode does not inject the android entrypoint vars
@@ -296,8 +301,10 @@ def test_build_termux_env_never_sets_ld_preload_even_with_guest_shim(tmp_path):
 
     env = _build_termux_env(
         str(rootfs),
+        "/fake/container",
         ["LD_PRELOAD=/host/libtermux-exec-ld-preload.so", "LD_LIBRARY_PATH=/host/lib"],
         minimal=False,
+        isolated=False,
     )
     assert "LD_PRELOAD" not in env
     assert "LD_LIBRARY_PATH" not in env
@@ -596,8 +603,9 @@ def test_get_bindings_termux_dist_type():
         patch("chroot_distro.commands.login.bindings.IS_TERMUX", True),
         patch("chroot_distro.commands.login.bindings.system_bindings", return_value=[("/system", "/system")]),
         patch("chroot_distro.commands.login.bindings.storage_bindings", return_value=[]),
+        patch("chroot_distro.commands.login.bindings.dalvik_cache_bindings", return_value=[]),
         patch(
-            "chroot_distro.commands.login.bindings.android_data_bindings",
+            "chroot_distro.commands.login.bindings.termux_app_bindings",
             return_value=[("/data/data/com.termux/cache", "/data/data/com.termux/cache")],
         ),
     ):
@@ -626,7 +634,8 @@ def test_custom_bind_overrides_data_on_termux():
         patch("chroot_distro.commands.login.bindings.IS_TERMUX", True),
         patch("chroot_distro.commands.login.bindings.system_bindings", return_value=[]),
         patch("chroot_distro.commands.login.bindings.storage_bindings", return_value=[]),
-        patch("chroot_distro.commands.login.bindings.android_data_bindings", return_value=[]),
+        patch("chroot_distro.commands.login.bindings.dalvik_cache_bindings", return_value=[]),
+        patch("chroot_distro.commands.login.bindings.termux_app_bindings", return_value=[]),
         patch("chroot_distro.commands.login.bindings.TERMUX_PREFIX", "/data/data/com.termux/files/usr"),
     ):
         binds, _ = get_bindings(
@@ -748,7 +757,7 @@ def test_custom_bind_removes_nested_system_binds_on_termux():
         patch("chroot_distro.commands.login.bindings.system_bindings", return_value=[]),
         patch("chroot_distro.commands.login.bindings.storage_bindings", return_value=[]),
         patch(
-            "chroot_distro.commands.login.bindings.android_data_bindings",
+            "chroot_distro.commands.login.bindings.dalvik_cache_bindings",
             return_value=[
                 ("/data/dalvik-cache", "/data/dalvik-cache"),
                 (
@@ -757,6 +766,7 @@ def test_custom_bind_removes_nested_system_binds_on_termux():
                 ),
             ],
         ),
+        patch("chroot_distro.commands.login.bindings.termux_app_bindings", return_value=[]),
         patch("chroot_distro.commands.login.bindings.TERMUX_PREFIX", "/data/data/com.termux/files/usr"),
     ):
         binds, _ = get_bindings(
