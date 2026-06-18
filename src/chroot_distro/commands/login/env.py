@@ -110,16 +110,63 @@ def is_sensitive_env_key(key: str) -> bool:
     return bool(_SENSITIVE_ENV_KEY_RE.search(key))
 
 
-def read_manifest_env(container_dir: str) -> list:
-    """Return image Env entries from manifest.json, or [] if absent/invalid."""
+def _read_manifest_config(container_dir: str) -> dict:
+    """Return the image_config.config dict from manifest.json, or {}."""
     manifest_path = os.path.join(container_dir, "manifest.json")
     try:
         with open(manifest_path) as fh:
             data = json.load(fh)
-        env = (data.get("image_config") or {}).get("config", {}).get("Env") or []
-        return [e for e in env if isinstance(e, str) and "=" in e]
+        return (data.get("image_config") or {}).get("config") or {}
     except (OSError, ValueError):
-        return []
+        return {}
+
+
+def read_manifest_env(container_dir: str) -> list:
+    """Return image Env entries from manifest.json, or [] if absent/invalid."""
+    cfg = _read_manifest_config(container_dir)
+    env = cfg.get("Env") or []
+    return [e for e in env if isinstance(e, str) and "=" in e]
+
+
+def read_manifest_user(container_dir: str) -> str | None:
+    """Return the image's default User (e.g. ``"65532:65532"``), or None."""
+    user = _read_manifest_config(container_dir).get("User")
+    return user if user and isinstance(user, str) else None
+
+
+def read_manifest_workdir(container_dir: str) -> str | None:
+    """Return the image's WorkingDir (e.g. ``"/app"``), or None."""
+    wd = _read_manifest_config(container_dir).get("WorkingDir")
+    return wd if wd and isinstance(wd, str) else None
+
+
+def read_manifest_shell(container_dir: str) -> str | None:
+    """Return the first element of the image's Shell list, or None.
+
+    Docker images may declare ``"Shell": ["sh", "-c"]``; returns ``"sh"``
+    (the interpreter path) so the caller can try it as a login shell
+    fallback when ``/etc/passwd``'s shell is missing.
+    """
+    shell = _read_manifest_config(container_dir).get("Shell")
+    if isinstance(shell, list) and shell and isinstance(shell[0], str):
+        return shell[0]
+    return None
+
+
+def read_manifest_exposed_ports(container_dir: str) -> list[str]:
+    """Return declared ExposedPorts (e.g. ``["8080/tcp", "443/tcp"]``), or []."""
+    ports = _read_manifest_config(container_dir).get("ExposedPorts")
+    if isinstance(ports, dict):
+        return sorted(ports.keys())
+    return []
+
+
+def read_manifest_volumes(container_dir: str) -> list[str]:
+    """Return declared Volume paths (e.g. ``["/data", "/var/log"]``), or []."""
+    volumes = _read_manifest_config(container_dir).get("Volumes")
+    if isinstance(volumes, dict):
+        return sorted(volumes.keys())
+    return []
 
 
 def inject_termux_profile(

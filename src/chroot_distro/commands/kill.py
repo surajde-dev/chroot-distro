@@ -1,4 +1,5 @@
 import contextlib
+import json
 import os
 import signal
 import subprocess
@@ -15,6 +16,23 @@ from chroot_distro.paths import container_rootfs
 
 _SIGTERM_GRACE_SECS = 1.0
 _SIGKILL_WAIT_SECS = 2.0
+
+
+def _read_stop_signal(container_name: str) -> int:
+    """Read StopSignal from manifest, return signal number."""
+    from chroot_distro.paths import container_manifest
+
+    try:
+        with open(container_manifest(container_name)) as fh:
+            data = json.load(fh)
+        sig_str = (data.get("image_config") or {}).get("config", {}).get("StopSignal", "")
+        if not sig_str:
+            return signal.SIGTERM
+        if sig_str.isdigit():
+            return int(sig_str)
+        return getattr(signal, sig_str, signal.SIGTERM)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return signal.SIGTERM
 
 
 def _wait_until_gone(container_name: str, timeout: float) -> list[int]:
@@ -39,6 +57,7 @@ def command_kill(args) -> None:
     require_valid_name(container_name)
 
     rootfs_dir = container_rootfs(container_name)
+    stop_signal = _read_stop_signal(container_name)
     if not os.path.isdir(rootfs_dir):
         crit_error(f"container '{container_name}' is not installed.")
         sys.exit(1)
@@ -95,7 +114,7 @@ def command_kill(args) -> None:
                 )
                 for pid in active_pids:
                     with contextlib.suppress(OSError):
-                        os.kill(pid, signal.SIGTERM)
+                        os.kill(pid, stop_signal)
 
                 remaining = _wait_until_gone(container_name, _SIGTERM_GRACE_SECS)
                 if remaining:

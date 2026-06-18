@@ -21,6 +21,15 @@ class _ContainerRow:
     status: str
 
 
+@dataclass(frozen=True)
+class _VerboseInfo:
+    source_url: str = ""
+    image_type: str = ""
+    default_user: str = ""
+    workdir: str = ""
+    exposed_ports: str = ""
+
+
 def _iter_container_names() -> list[str]:
     try:
         return sorted(e for e in os.listdir(CONTAINERS_DIR) if os.path.isdir(container_rootfs(e)))
@@ -67,6 +76,34 @@ def _ensure_manifest_readable(manifest_path: str) -> None:
         return
     with contextlib.suppress(OSError):
         os.chmod(manifest_path, (st.st_mode & 0o777) | 0o644)
+
+
+def _read_verbose_info(name: str) -> _VerboseInfo:
+    """Extract detailed image config fields from manifest.json."""
+    manifest_path = container_manifest(name)
+    if not os.path.isfile(manifest_path):
+        return _VerboseInfo()
+    _ensure_manifest_readable(manifest_path)
+    try:
+        with open(manifest_path, encoding="utf-8") as fh:
+            data = json.loads(fh.read())
+    except (OSError, json.JSONDecodeError):
+        return _VerboseInfo()
+    cfg = (data.get("image_config") or {}).get("config") or {}
+    labels = cfg.get("Labels") or {}
+    source_url = labels.get("org.opencontainers.image.source", "")
+    image_type = labels.get("IMAGE_TYPE", "")
+    default_user = cfg.get("User", "")
+    workdir = cfg.get("WorkingDir", "")
+    ports_dict = cfg.get("ExposedPorts") or {}
+    exposed_ports = ", ".join(sorted(ports_dict.keys())) if ports_dict else ""
+    return _VerboseInfo(
+        source_url=source_url,
+        image_type=image_type,
+        default_user=default_user,
+        workdir=workdir,
+        exposed_ports=exposed_ports,
+    )
 
 
 def _read_image_source(name: str) -> str:
@@ -132,6 +169,7 @@ def _format_table(rows: list[_ContainerRow]) -> list[str]:
 def command_list(args) -> None:
     """List every container directory that contains a rootfs/."""
     quiet = getattr(args, "quiet", False)
+    verbose = getattr(args, "verbose", False)
     entries = _iter_container_names()
 
     if quiet:
@@ -146,15 +184,46 @@ def command_list(args) -> None:
         msg(f"{C['CYAN']}Install one with: {C['GREEN']}{PROGRAM_NAME} install ubuntu:25.10{C['RST']}")
     else:
         rows: list[_ContainerRow] = []
+        verbose_infos: dict[str, _VerboseInfo] = {}
         total = len(entries)
         with loading_line("Gathering container info...") as update:
             for index, name in enumerate(entries, start=1):
                 update(f"Scanning {name} ({index}/{total})...")
                 rows.append(_container_row(name))
+                if verbose:
+                    verbose_infos[name] = _read_verbose_info(name)
         msg(f"{C['CYAN']}Installed containers:{C['RST']}")
         msg()
         for line in _format_table(rows):
             msg(line)
+        if verbose:
+            msg()
+            for row in rows:
+                info = verbose_infos.get(row.name)
+                if not info:
+                    continue
+                has_detail = any(
+                    [
+                        info.source_url,
+                        info.image_type,
+                        info.default_user,
+                        info.workdir,
+                        info.exposed_ports,
+                    ]
+                )
+                if not has_detail:
+                    continue
+                msg(f"  {C['GREEN']}{row.name}{C['RST']}:")
+                if info.source_url:
+                    msg(f"    {C['CYAN']}Source:{C['RST']}  {info.source_url}")
+                if info.image_type:
+                    msg(f"    {C['CYAN']}Type:{C['RST']}    {info.image_type}")
+                if info.default_user:
+                    msg(f"    {C['CYAN']}User:{C['RST']}    {info.default_user}")
+                if info.workdir:
+                    msg(f"    {C['CYAN']}WorkDir:{C['RST']} {info.workdir}")
+                if info.exposed_ports:
+                    msg(f"    {C['CYAN']}Ports:{C['RST']}   {info.exposed_ports}")
         msg()
         msg(f"{C['CYAN']}Log in with: {C['GREEN']}{PROGRAM_NAME} login <name>{C['RST']}")
     msg()

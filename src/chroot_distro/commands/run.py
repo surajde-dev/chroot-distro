@@ -59,6 +59,12 @@ def command_run(args) -> None:
     if not getattr(args, "work_dir", None):
         args.work_dir = img_cfg.get("WorkingDir") or "/"
 
+    # Default to the image's User when no explicit --user was given.
+    if getattr(args, "user", None) is None:
+        img_user = img_cfg.get("User")
+        if img_user:
+            args.user = img_user
+
     args._run_inner = inner
     args.login_cmd = []
     command_login(args)

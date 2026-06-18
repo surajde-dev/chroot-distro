@@ -106,7 +106,7 @@ def parse_cli_args(
 
 def _add_login_or_run_common(p):
     """Options shared by both `login` and `run`."""
-    p.add_argument("-u", "--user", default="root")
+    p.add_argument("-u", "--user", default=None)
     _iso = p.add_mutually_exclusive_group()
     _iso.add_argument("--isolated", "--isolate", dest="isolated", action="store_true")
     _iso.add_argument("--minimal", action="store_true")
@@ -227,7 +227,9 @@ def _list(sub):
     p = sub.add_parser("list", aliases=["li", "ls"], add_help=False)
     p._cd_command = "list"
     p.add_argument("-h", "--help", action="store_true")
-    p.add_argument("-q", "--quiet", action="store_true")
+    vq = p.add_mutually_exclusive_group()
+    vq.add_argument("-v", "--verbose", action="store_true")
+    vq.add_argument("-q", "--quiet", action="store_true")
 
 
 def _backup(sub):

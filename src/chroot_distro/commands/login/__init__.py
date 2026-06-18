@@ -16,6 +16,11 @@ from chroot_distro.commands.login.env import (
     IMAGE_ENV_BLOCKED,
     inject_termux_profile,
     read_manifest_env,
+    read_manifest_exposed_ports,
+    read_manifest_shell,
+    read_manifest_user,
+    read_manifest_volumes,
+    read_manifest_workdir,
     resolve_term,
 )
 from chroot_distro.commands.login.passwd import (
@@ -212,6 +217,60 @@ def _resolve_login_user(rootfs: str, container_name: str, user_arg: str) -> dict
     }
 
 
+def _merge_image_path(image_path: str, system_path: str) -> str:
+    """Merge image PATH with system PATH — image dirs win (prepended).
+
+    Directories from the image come first so that image-specific binaries
+    are found before system-wide defaults.  System dirs that are not already
+    present in the image PATH are appended so standard tools remain available.
+    """
+    image_dirs = [d for d in image_path.split(":") if d]
+    system_dirs = [d for d in system_path.split(":") if d]
+    seen: set[str] = set()
+    merged: list[str] = []
+    for d in image_dirs + system_dirs:
+        if d not in seen:
+            merged.append(d)
+            seen.add(d)
+    return ":".join(merged)
+
+
+def _check_arch_mismatch(container_path: str) -> None:
+    """Warn if the image architecture does not match the host CPU."""
+    from chroot_distro.arch import get_device_cpu_arch, normalize_arch
+
+    try:
+        with open(os.path.join(container_path, "manifest.json")) as fh:
+            data = json.load(fh)
+        img_arch_raw = data.get("arch") or (data.get("image_config") or {}).get("architecture", "")
+        if not img_arch_raw:
+            return
+        img_arch = normalize_arch(img_arch_raw) or img_arch_raw
+        host_arch = get_device_cpu_arch()
+        if img_arch == host_arch:
+            return
+        # Check binfmt_misc for cross-arch execution support.
+        binfmt_dir = "/proc/sys/fs/binfmt_misc"
+        if os.path.isdir(binfmt_dir):
+            for entry in os.listdir(binfmt_dir):
+                if entry in ("register", "status"):
+                    continue
+                try:
+                    with open(os.path.join(binfmt_dir, entry)) as fh:
+                        if "enabled" in fh.read():
+                            return  # binfmt handler present
+                except OSError:
+                    continue
+        warn(
+            f"Image architecture '{img_arch}' does not match host "
+            f"architecture '{host_arch}'. Binaries may fail to execute. "
+            f"Install qemu-user-static and register binfmt_misc handlers "
+            f"for cross-architecture support."
+        )
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+
+
 def _build_termux_env(rootfs, container_path, extra_env, minimal, isolated, container_name=""):
     env: dict = {}
     if not minimal:
@@ -228,7 +287,10 @@ def _build_termux_env(rootfs, container_path, extra_env, minimal, isolated, cont
     for entry in read_manifest_env(container_path):
         key, _, val = entry.partition("=")
         if key and key not in IMAGE_ENV_BLOCKED:
-            env[key] = val
+            if key == "PATH":
+                env["PATH"] = _merge_image_path(val, env.get("PATH", ""))
+            else:
+                env[key] = val
 
     # Android system vars are inherited from the host only in the default
     # mode; isolated and minimal sessions keep just the image's values.
@@ -278,7 +340,10 @@ def _build_normal_env(rootfs, container_path, login_user, login_home, extra_env,
     for entry in read_manifest_env(container_path):
         key, _, val = entry.partition("=")
         if key and key not in IMAGE_ENV_BLOCKED:
-            env[key] = val
+            if key == "PATH":
+                env["PATH"] = _merge_image_path(val, env.get("PATH", ""))
+            else:
+                env[key] = val
 
     # Android system vars are inherited from the host only in the default
     # mode; isolated and minimal sessions keep just the image's values.
@@ -305,12 +370,32 @@ def _build_normal_env(rootfs, container_path, login_user, login_home, extra_env,
 
 
 def _check_shell_available(rootfs, container_path, login_shell, container_name):
+    """Verify *login_shell* exists in rootfs; return a fallback if found.
+
+    Returns the original *login_shell* when it exists, or the image's
+    ``Shell[0]`` when that is available as a fallback.  Exits with an
+    error message if no usable shell can be found.
+    """
     try:
         shell_found = os.path.isfile(resolve_rootfs_path(rootfs, login_shell))
     except OSError:
         shell_found = False
     if shell_found:
-        return
+        return login_shell
+
+    # Try the image manifest's Shell as a fallback before giving up.
+    manifest_shell = read_manifest_shell(container_path)
+    if manifest_shell:
+        try:
+            if os.path.isfile(resolve_rootfs_path(rootfs, manifest_shell)):
+                log.info(
+                    "Shell '%s' unavailable; falling back to image Shell '%s'.",
+                    login_shell,
+                    manifest_shell,
+                )
+                return manifest_shell
+        except OSError:
+            pass
 
     has_ep_or_cmd = False
     try:
@@ -345,7 +430,17 @@ def _command_login_inner(container_name: str, args) -> None:
     dist_type = _detect_dist_type(rootfs)
     container_path = container_dir(container_name)
 
-    login_user = getattr(args, "user", "root") or "root"
+    # Warn early if the image architecture doesn't match the host CPU.
+    _check_arch_mismatch(container_path)
+
+    # Resolve login user: explicit --user wins, then image manifest User,
+    # then fall back to "root".
+    _explicit_user = getattr(args, "user", None)
+    if _explicit_user is not None:
+        login_user = _explicit_user
+    else:
+        manifest_user = read_manifest_user(container_path)
+        login_user = manifest_user if manifest_user else "root"
     login_wd = getattr(args, "work_dir", "") or ""
     isolated = getattr(args, "isolated", False)
     minimal = getattr(args, "minimal", False)
@@ -543,6 +638,15 @@ def _command_login_inner(container_name: str, args) -> None:
 
         if not login_wd:
             login_wd = login_home
+            # If login home doesn't exist, try image WorkingDir as fallback.
+            if login_wd and login_wd != "/":
+                wd_host = os.path.join(rootfs, login_wd.lstrip("/"))
+                if not os.path.isdir(wd_host):
+                    manifest_wd = read_manifest_workdir(container_path)
+                    if manifest_wd:
+                        manifest_wd_host = os.path.join(rootfs, manifest_wd.lstrip("/"))
+                        if os.path.isdir(manifest_wd_host):
+                            login_wd = manifest_wd
 
         child_env = _build_normal_env(
             rootfs,
@@ -558,7 +662,7 @@ def _command_login_inner(container_name: str, args) -> None:
         if run_inner is not None:
             inner = run_inner
         else:
-            _check_shell_available(rootfs, container_path, login_shell, container_name)
+            login_shell = _check_shell_available(rootfs, container_path, login_shell, container_name)
             inner = [login_shell, "-c", shlex.join(login_cmd)] if login_cmd else [login_shell, "-l"]
 
     # Android paranoid-network: the kernel only allows socket() for processes
@@ -823,6 +927,25 @@ def _command_login_inner(container_name: str, args) -> None:
             # Phase 3: NVIDIA ldconfig refresh
             if has_nvidia:
                 run_ldconfig_in_chroot(rootfs)
+
+            # Phase 4: Auto-create image-declared Volume directories
+            for vol_path in read_manifest_volumes(container_path):
+                vol_host = os.path.join(rootfs, vol_path.lstrip("/"))
+                if not os.path.exists(vol_host):
+                    try:
+                        os.makedirs(vol_host, exist_ok=True)
+                        uid_v = int(login_uid) if login_uid is not None else 0
+                        gid_v = int(login_gid) if login_gid is not None else 0
+                        os.chown(vol_host, uid_v, gid_v)
+                    except OSError:
+                        log.debug("Could not create volume dir %s", vol_path)
+
+            # Phase 5: Inform about image-declared exposed ports
+            exposed = read_manifest_exposed_ports(container_path)
+            if exposed:
+                from chroot_distro.message import log_info
+
+                log_info(f"Image declares exposed ports: {', '.join(exposed)}")
         else:
             # Not the first session: bind mounts are NOT re-applied, so any
             # mount-affecting flag passed now is silently ignored because the
