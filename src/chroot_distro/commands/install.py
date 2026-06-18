@@ -116,8 +116,10 @@ def command_install(args) -> None:
         custom_container_name,
     )
 
+    insecure = getattr(args, "insecure", False)
+
     with ContainerLock(install_name, exclusive=True, command="install"):
-        _run_install(install_name, image_ref, local_path, url, dist_arch)
+        _run_install(install_name, image_ref, local_path, url, dist_arch, insecure=insecure)
 
 
 def _resolve_install_name(image_ref, local_path, url, custom_container_name):
@@ -161,6 +163,7 @@ def _run_install(
     local_path,
     url,
     dist_arch: str,
+    insecure: bool = False,
 ) -> None:
     """Inner install logic — called with the container lock already held."""
     container_path = container_dir(install_name)
@@ -208,12 +211,12 @@ def _run_install(
             )
             os.close(fd)
             log_info("Downloading archive...")
-            download_file(url, tmp_archive)
+            download_file(url, tmp_archive, insecure=insecure)
             log_info("Extracting rootfs from archive...")
             metadata = install_from_local_file(tmp_archive, rootfs_dir, dist_arch)
         else:
             os.makedirs(BASE_CACHE_DIR, exist_ok=True)
-            metadata = pull_image(image_ref, rootfs_dir, dist_arch)
+            metadata = pull_image(image_ref, rootfs_dir, dist_arch, insecure=insecure)
 
         # Write manifest.json when metadata is available
         if metadata is not None:

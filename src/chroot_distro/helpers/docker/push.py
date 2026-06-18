@@ -23,8 +23,12 @@ from chroot_distro.helpers.docker.transport import (
     auth_note,
     auth_opener,
     get_auth_token,
+    opener,
     push_denied_msg,
-    registry_base_url,
+)
+from chroot_distro.helpers.download import (
+    is_retryable_http_error,
+    retry_http,
 )
 from chroot_distro.message import (
     C,
@@ -67,29 +71,12 @@ def _push_max_retries() -> int:
 
 def _is_retriable(exc: BaseException) -> bool:
     """Return True for transient registry or connection failures."""
-    if isinstance(exc, urllib.error.HTTPError):
-        return exc.code >= 500 or exc.code == 429
-    if isinstance(exc, urllib.error.URLError):
-        return isinstance(exc.reason, _TRANSIENT_ERRORS)
-    return isinstance(exc, _TRANSIENT_ERRORS)
+    return is_retryable_http_error(exc)
 
 
 def _with_retry(operation: typing.Callable[[], typing.Any], what: str) -> typing.Any:
-    """Run *operation*, retrying transient failures with exponential backoff."""
-    max_retries = _push_max_retries()
-    last_exc: BaseException | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            return operation()
-        except BaseException as exc:
-            last_exc = exc
-            if not _is_retriable(exc) or attempt >= max_retries:
-                raise
-            delay = min(2**attempt, 30)
-            log_info(f"{what}: transient error ({exc}); retry {attempt + 1}/{max_retries} in {delay}s...")
-            time.sleep(delay)
-    assert last_exc is not None
-    raise last_exc
+    """Run *operation*, retrying transient failures."""
+    return retry_http(operation, what=what, max_retries=_push_max_retries() + 1, retry_delay=5)
 
 
 def _resolve_upload_url(base: str, location: str) -> str:
@@ -107,10 +94,10 @@ def _blob_exists(
     repo: str,
     digest: str,
     token: str,
-    registry: str = "",
+    base: str,
+    insecure: bool = False,
 ) -> bool:
     """Return True iff blob *digest* already exists on the registry."""
-    base = registry_base_url(registry)
     url = f"{base}/v2/{repo}/blobs/{digest}"
     headers = {**_ua()}
     if token:
@@ -119,7 +106,8 @@ def _blob_exists(
     def _do() -> bool:
         req = urllib.request.Request(url, method="HEAD", headers=headers)
         try:
-            with auth_opener().open(req) as resp:
+            op = auth_opener() if not insecure else opener(insecure)
+            with op.open(req) as resp:
                 return bool(200 <= resp.status < 300)
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
@@ -172,14 +160,14 @@ def _upload_blob_bytes(
     digest: str,
     data: bytes,
     token: str,
-    registry: str = "",
+    base: str,
+    insecure: bool = False,
 ) -> None:
     """Upload a small in-memory blob (POST + monolithic PUT, retry-wrapped)."""
-    base = registry_base_url(registry)
     headers = _auth_headers(token)
 
     def _do() -> None:
-        upload_url = _open_upload_session(base, repo, headers)
+        upload_url = _open_upload_session(base, repo, headers, insecure=insecure)
         full_put_url = _with_digest(upload_url, digest)
         put_req = urllib.request.Request(
             full_put_url,
@@ -191,7 +179,8 @@ def _upload_blob_bytes(
                 "Content-Length": str(len(data)),
             },
         )
-        with auth_opener().open(put_req) as resp:
+        op = auth_opener() if not insecure else opener(insecure)
+        with op.open(put_req) as resp:
             if not 200 <= resp.status < 300:
                 raise RuntimeError(f"Blob upload failed for {digest}: HTTP {resp.status}")
 
@@ -205,7 +194,7 @@ def _auth_headers(token: str) -> dict[str, str]:
     return headers
 
 
-def _open_upload_session(base: str, repo: str, headers: dict[str, str]) -> str:
+def _open_upload_session(base: str, repo: str, headers: dict[str, str], insecure: bool = False) -> str:
     """POST a new blob upload session and return the upload URL."""
     post_req = urllib.request.Request(
         f"{base}/v2/{repo}/blobs/uploads/",
@@ -213,7 +202,8 @@ def _open_upload_session(base: str, repo: str, headers: dict[str, str]) -> str:
         method="POST",
         headers={**headers, "Content-Length": "0"},
     )
-    with auth_opener().open(post_req) as resp:
+    op = auth_opener() if not insecure else opener(insecure)
+    with op.open(post_req) as resp:
         location = resp.headers.get("Location", "")
     return _resolve_upload_url(base, location)
 
@@ -241,11 +231,12 @@ def _upload_blob_monolithic(
     headers: dict[str, str],
     size: int,
     label: str,
+    insecure: bool = False,
 ) -> None:
     """POST a session then send the whole blob in one PUT (retry-wrapped)."""
 
     def _do() -> None:
-        upload_url = _open_upload_session(base, repo, headers)
+        upload_url = _open_upload_session(base, repo, headers, insecure=insecure)
         put_url = _with_digest(upload_url, digest)
         with open(file_path, "rb") as fh:
             reader = _ProgressReader(fh, size, label or digest[:19])
@@ -259,7 +250,8 @@ def _upload_blob_monolithic(
                     "Content-Length": str(size),
                 },
             )
-            with auth_opener().open(put_req) as resp:
+            op = auth_opener() if not insecure else opener(insecure)
+            with op.open(put_req) as resp:
                 if not 200 <= resp.status < 300:
                     raise RuntimeError(f"Blob upload failed for {digest}: HTTP {resp.status}")
 
@@ -274,6 +266,7 @@ def _upload_blob_chunked(
     headers: dict[str, str],
     size: int,
     label: str,
+    insecure: bool = False,
 ) -> None:
     """Upload a blob in PATCH chunks, resuming on transient failure.
 
@@ -287,7 +280,9 @@ def _upload_blob_chunked(
     max_retries = _push_max_retries()
     progress = _ProgressReader(typing.cast(typing.BinaryIO, None), size, label or digest[:19])
 
-    upload_url = _with_retry(lambda: _open_upload_session(base, repo, headers), f"open upload {label}")
+    upload_url = _with_retry(
+        lambda: _open_upload_session(base, repo, headers, insecure=insecure), f"open upload {label}"
+    )
     offset = 0
     attempt = 0
 
@@ -311,7 +306,8 @@ def _upload_blob_chunked(
                     },
                 )
                 try:
-                    with auth_opener().open(patch_req) as resp:
+                    op = auth_opener() if not insecure else opener(insecure)
+                    with op.open(patch_req) as resp:
                         if not 200 <= resp.status < 300:
                             raise RuntimeError(f"Chunk upload failed for {digest}: HTTP {resp.status}")
                         next_url = resp.headers.get("Location", "")
@@ -345,7 +341,8 @@ def _upload_blob_chunked(
                     method="PUT",
                     headers={**headers, "Content-Length": "0"},
                 )
-                with auth_opener().open(put_req) as resp:
+                op = auth_opener() if not insecure else opener(insecure)
+                with op.open(put_req) as resp:
                     if not 200 <= resp.status < 300:
                         raise RuntimeError(f"Blob finalize failed for {digest}: HTTP {resp.status}")
 
@@ -361,7 +358,8 @@ def _upload_blob_file(
     digest: str,
     file_path: str,
     token: str,
-    registry: str = "",
+    base: str,
+    insecure: bool = False,
     label: str = "",
 ) -> None:
     """Upload a blob from *file_path*.
@@ -369,15 +367,14 @@ def _upload_blob_file(
     Blobs at or above the configured chunk size are uploaded in chunks
     (resumable); smaller blobs use a single retry-wrapped PUT.
     """
-    base = registry_base_url(registry)
     headers = _auth_headers(token)
     size = os.path.getsize(file_path)
 
     if size >= _push_chunk_size():
-        _upload_blob_chunked(base, repo, digest, file_path, headers, size, label)
+        _upload_blob_chunked(base, repo, digest, file_path, headers, size, label, insecure=insecure)
     else:
         try:
-            _upload_blob_monolithic(base, repo, digest, file_path, headers, size, label)
+            _upload_blob_monolithic(base, repo, digest, file_path, headers, size, label, insecure=insecure)
         finally:
             clear_bar()
 
@@ -388,11 +385,11 @@ def _put_manifest(
     body: bytes,
     media_type: str,
     token: str,
-    registry: str = "",
+    base: str,
+    insecure: bool = False,
 ) -> str:
     """PUT a manifest at <reference> (tag or digest). Returns the registry
     digest from the Docker-Content-Digest header, if provided."""
-    base = registry_base_url(registry)
     url = f"{base}/v2/{repo}/manifests/{reference}"
     headers = {
         **_ua(),
@@ -404,7 +401,8 @@ def _put_manifest(
 
     def _do() -> str:
         req = urllib.request.Request(url, data=body, method="PUT", headers=headers)
-        with auth_opener().open(req) as resp:
+        op = auth_opener() if not insecure else opener(insecure)
+        with op.open(req) as resp:
             if not 200 <= resp.status < 300:
                 raise RuntimeError(f"Manifest upload failed: HTTP {resp.status}")
             return str(resp.headers.get("Docker-Content-Digest", ""))
@@ -421,7 +419,7 @@ def _strip_private_keys(d: dict[str, typing.Any]) -> dict[str, typing.Any]:
     return {k: v for k, v in d.items() if not k.startswith("_")}
 
 
-def push_image(image_ref: str, arch: str) -> dict[str, typing.Any]:
+def push_image(image_ref: str, arch: str, insecure: bool = False) -> dict[str, typing.Any]:
     """Push a built image (resolved from the manifest cache) to its registry.
 
     The image must have been produced by `chroot-distro build` under
@@ -468,7 +466,7 @@ def push_image(image_ref: str, arch: str) -> dict[str, typing.Any]:
 
     log_info(f"Authenticating with registry{auth_note()}...")
     try:
-        token = get_auth_token(repo, registry, actions="pull,push")
+        token, base = get_auth_token(repo, registry, actions="pull,push", insecure=insecure)
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
             raise RuntimeError(push_denied_msg(image_ref, exc.code)) from exc
@@ -484,7 +482,7 @@ def push_image(image_ref: str, arch: str) -> dict[str, typing.Any]:
         size = os.path.getsize(path)
 
         try:
-            if _blob_exists(repo, digest, token, registry):
+            if _blob_exists(repo, digest, token, base, insecure=insecure):
                 log_info(f"{short_id}: Layer {i + 1}/{n_layers} already exists on registry, skipping upload.")
                 continue
 
@@ -494,7 +492,8 @@ def push_image(image_ref: str, arch: str) -> dict[str, typing.Any]:
                 digest,
                 path,
                 token,
-                registry,
+                base,
+                insecure=insecure,
                 label=short_id,
             )
             bytes_uploaded += size
@@ -505,7 +504,7 @@ def push_image(image_ref: str, arch: str) -> dict[str, typing.Any]:
 
     cfg_short = expected_cfg_digest.split(":")[-1][:12]
     try:
-        if _blob_exists(repo, expected_cfg_digest, token, registry):
+        if _blob_exists(repo, expected_cfg_digest, token, base, insecure=insecure):
             log_info(f"{cfg_short}: Image config already exists on registry, skipping upload.")
         else:
             log_info(f"{cfg_short}: Uploading image config ({fmt_size(len(config_bytes))})...")
@@ -514,7 +513,8 @@ def push_image(image_ref: str, arch: str) -> dict[str, typing.Any]:
                 expected_cfg_digest,
                 config_bytes,
                 token,
-                registry,
+                base,
+                insecure=insecure,
             )
             bytes_uploaded += len(config_bytes)
     except urllib.error.HTTPError as exc:
@@ -532,7 +532,8 @@ def push_image(image_ref: str, arch: str) -> dict[str, typing.Any]:
             manifest_bytes,
             manifest_media,
             token,
-            registry,
+            base,
+            insecure=insecure,
         )
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):

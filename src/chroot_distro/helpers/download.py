@@ -9,6 +9,7 @@ import ssl
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,7 +33,132 @@ from chroot_distro.progress import (
 )
 from chroot_distro.rate_limit import TokenBucket
 
-__all__ = ("download_file", "sha256_file")
+__all__ = (
+    "certificate_error_msg",
+    "download_file",
+    "insecure_ssl_context",
+    "is_cert_verification_error",
+    "is_plaintext_http_tls_error",
+    "is_retryable_http_error",
+    "retry_http",
+    "sha256_file",
+)
+
+
+def insecure_ssl_context() -> ssl.SSLContext:
+    """Return an SSL context that skips certificate and hostname checks.
+
+    Used only when the caller explicitly opts in via ``--allow-insecure``,
+    so an HTTPS endpoint with an untrusted/expired/self-signed certificate
+    (or a hostname mismatch) can still be reached. This disables the
+    protection TLS provides against impersonation — never the default.
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def is_cert_verification_error(exc: urllib.error.URLError) -> bool:
+    """Return True if *exc* is a TLS certificate verification failure.
+
+    Covers an untrusted CA, an expired or self-signed certificate, and a
+    hostname mismatch — i.e. the server *does* speak TLS, but its
+    certificate is not trusted. Distinct from is_plaintext_http_tls_error,
+    which means the peer is not speaking TLS at all.
+    """
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return True
+    return isinstance(reason, ssl.SSLError) and getattr(reason, "reason", None) == "CERTIFICATE_VERIFY_FAILED"
+
+
+def certificate_error_msg(target: str) -> str:
+    """Return the error shown when *target* presents an untrusted certificate."""
+    return (
+        f"TLS certificate verification failed for '{target}' — the server's "
+        f"certificate is untrusted, expired, self-signed, or issued for a "
+        f"different hostname. If you trust this endpoint, re-run with "
+        f"'--allow-insecure' to skip certificate verification."
+    )
+
+
+# OpenSSL handshake-failure reasons that mean the peer answered our TLS
+# ClientHello with plaintext bytes — the signature of a server that only
+# speaks plain HTTP reached over an https:// URL. WRONG_VERSION_NUMBER is what
+# modern OpenSSL reports; the others cover older or edge builds. These are
+# *not* emitted for genuine TLS problems (expired/untrusted cert,
+# protocol-version mismatch), so matching them does not misclassify a real
+# HTTPS endpoint.
+_PLAINTEXT_HTTP_TLS_REASONS = frozenset(
+    {
+        "WRONG_VERSION_NUMBER",
+        "UNKNOWN_PROTOCOL",
+        "HTTP_REQUEST",
+    }
+)
+
+
+def is_plaintext_http_tls_error(exc: urllib.error.URLError) -> bool:
+    """Return True if *exc* is a TLS handshake failure caused by the peer
+    replying with plaintext HTTP rather than a genuine TLS error.
+
+    ``urlopen`` of an https:// URL against a server that only speaks plain
+    HTTP raises ``URLError`` whose ``reason`` is an ``ssl.SSLError`` with a
+    telltale reason string (e.g. WRONG_VERSION_NUMBER). That alone proves the
+    peer is HTTP-only — no second network probe is needed. Shared by the
+    Docker registry transport and the generic URL downloader.
+    """
+    reason = getattr(exc, "reason", None)
+    if not isinstance(reason, ssl.SSLError):
+        return False
+    return (getattr(reason, "reason", None) or "") in _PLAINTEXT_HTTP_TLS_REASONS
+
+
+def is_retryable_http_error(exc: BaseException) -> bool:
+    """Return True if a failed HTTP request is worth retrying.
+
+    Deterministic failures are not retried — they cannot succeed on a repeat
+    request: an HTTP client error (4xx, except 408 Request Timeout and 429 Too
+    Many Requests, which mean "retry later"), a TLS certificate verification
+    failure, or a plaintext-HTTP reply to an https:// URL. Everything else —
+    5xx server errors, connection resets, timeouts, DNS failures — is treated
+    as transient and retried.
+    """
+    import http.client
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return not (400 <= exc.code < 500 and exc.code not in (408, 429))
+    if isinstance(exc, urllib.error.URLError):
+        return not (is_cert_verification_error(exc) or is_plaintext_http_tls_error(exc))
+    if isinstance(exc, (FileNotFoundError, PermissionError)):
+        return False
+    return isinstance(exc, (OSError, ssl.SSLError, http.client.HTTPException))
+
+
+def retry_http(operation, *, what: str, max_retries: int = 5, retry_delay: float = 5):
+    """Run *operation* (a zero-arg callable performing one HTTP request),
+    retrying transient failures with a delay and a logged notice.
+
+    This is the single retry policy shared by the plain URL downloader and the
+    Docker/OCI registry transport, so both behave identically. A deterministic
+    failure (see is_retryable_http_error) is re-raised immediately — without
+    retrying or logging — so the caller can translate it into a meaningful
+    message. The original exception is likewise re-raised once every attempt is
+    spent. *what* is a short label for the retry log line.
+    """
+    for attempt in range(max_retries):
+        try:
+            return operation()
+        except KeyboardInterrupt:
+            raise
+        except (urllib.error.URLError, OSError) as exc:
+            if not is_retryable_http_error(exc) or attempt >= max_retries - 1:
+                raise
+            log_info(f"{what}: attempt {attempt + 1}/{max_retries} failed ({exc}); retrying in {retry_delay}s...")
+            time.sleep(retry_delay)
+    return None
+
 
 _READ_CHUNK = 262144  # 256 KiB — balances syscall overhead vs memory
 _SOCKET_TIMEOUT = 30  # seconds — prevents threads from blocking in read() forever
@@ -59,15 +185,7 @@ def _ua_headers() -> dict[str, str]:
 
 def _is_retriable(exc: BaseException) -> bool:
     """Return True for transient server or connection failures."""
-    if isinstance(exc, urllib.error.HTTPError):
-        return exc.code >= 500
-    if isinstance(exc, (FileNotFoundError, PermissionError)):
-        return False
-    if isinstance(exc, _TRANSIENT_ERRORS):
-        return True
-    if isinstance(exc, urllib.error.URLError):
-        return isinstance(exc.reason, _TRANSIENT_ERRORS)
-    return False
+    return is_retryable_http_error(exc)
 
 
 def _get_max_retries() -> int:
@@ -224,12 +342,17 @@ def _probe_url(
     return None  # pragma: no cover
 
 
-def _probe_server(url: str, headers: dict[str, str]) -> "_ProbeResult | None":
+def _probe_server(url: str, headers: dict[str, str], insecure: bool = False) -> "_ProbeResult | None":
     """Send HEAD (or fallback GET Range:0-0) to discover size + Range support.
 
     Returns *None* on any network error so the caller can fall back silently.
     """
-    return _probe_url(url, headers)
+    if insecure:
+        op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=insecure_ssl_context()))
+        open_fn = functools.partial(op.open, timeout=_SOCKET_TIMEOUT)
+    else:
+        open_fn = None
+    return _probe_url(url, headers, open_fn=open_fn)
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +432,7 @@ def _download_segment(
     abort_event: threading.Event,
     bucket: "TokenBucket | None" = None,
     live_responses: "_LiveResponses | None" = None,
+    insecure: bool = False,
 ) -> None:
     """Download one byte-range segment to *seg.tmp_path*.
 
@@ -334,7 +458,10 @@ def _download_segment(
 
     # Each thread gets its own opener to avoid urllib's internal
     # connection serialisation when sharing the default global opener.
-    opener = urllib.request.build_opener()
+    if insecure:
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=insecure_ssl_context()))
+    else:
+        opener = urllib.request.build_opener()
 
     reconnections = 0
     while reconnections <= _MAX_RECONNECTIONS:
@@ -479,6 +606,7 @@ def _download_multi(
     probe: _ProbeResult,
     connections: int,
     bucket: "TokenBucket | None" = None,
+    insecure: bool = False,
 ) -> None:
     """Download *url* to *dest* using multiple parallel Range connections."""
     chunks_meta_path = f"{dest}.chunks.json"
@@ -581,6 +709,7 @@ def _download_multi(
                     abort_event,
                     bucket,
                     live_responses,
+                    insecure=insecure,
                 ): seg
                 for seg in segments
             }
@@ -630,6 +759,7 @@ def _download_single(
     url: str,
     dest: str,
     bucket: "TokenBucket | None" = None,
+    insecure: bool = False,
 ) -> None:
     """Download *url* to *dest* with a single connection (original path)."""
     max_retries = _get_max_retries()
@@ -646,8 +776,11 @@ def _download_single(
     prev_sigint = signal.getsignal(signal.SIGINT)
     with contextlib.suppress(ValueError):
         signal.signal(signal.SIGINT, _on_sigint)
+    context = insecure_ssl_context() if insecure else None
     try:
-        return _download_single_loop(req, dest, bucket, max_retries, retry_delays, abort_event, last_exc)
+        return _download_single_loop(
+            req, dest, bucket, max_retries, retry_delays, abort_event, last_exc, context=context, insecure=insecure
+        )
     finally:
         with contextlib.suppress(ValueError):
             signal.signal(signal.SIGINT, prev_sigint)
@@ -661,6 +794,8 @@ def _download_single_loop(
     retry_delays: tuple[float, ...],
     abort_event: threading.Event,
     last_exc: BaseException | None,
+    context: ssl.SSLContext | None = None,
+    insecure: bool = False,
 ) -> None:
     url = req.full_url
     for attempt in range(max_retries + 1):
@@ -672,7 +807,7 @@ def _download_single_loop(
         try:
             with (
                 atomic_replace(dest) as tmp,
-                urllib.request.urlopen(req, timeout=_SOCKET_TIMEOUT) as resp,
+                urllib.request.urlopen(req, context=context, timeout=_SOCKET_TIMEOUT) as resp,
                 open(tmp, "wb") as fh,
             ):
                 total = int(resp.headers.get("Content-Length", 0))
@@ -711,6 +846,21 @@ def _download_single_loop(
             if _is_retriable(exc) and attempt < max_retries:
                 last_exc = exc
                 continue
+
+            host = urllib.parse.urlparse(url).netloc or url
+            if isinstance(exc, urllib.error.URLError):
+                if not insecure and is_cert_verification_error(exc):
+                    raise RuntimeError(certificate_error_msg(host)) from exc
+                if is_plaintext_http_tls_error(exc):
+                    raise RuntimeError(
+                        f"The URL '{url}' uses HTTPS, but the server at '{host}' "
+                        f"responded over plain HTTP (no TLS). If you trust this "
+                        f"source, retry with the same URL using the 'http://' "
+                        f"scheme instead."
+                    ) from exc
+            if isinstance(exc, urllib.error.HTTPError) and 400 <= exc.code < 500 and exc.code not in (408, 429):
+                raise RuntimeError(f"Cannot download {url}: HTTP {exc.code} {exc.reason}") from exc
+
             msg()
             log_error("Download failure, please check your network connection.")
             raise RuntimeError(f"Cannot download {url}: {exc}") from exc
@@ -721,7 +871,13 @@ def _download_single_loop(
 # ---------------------------------------------------------------------------
 
 
-def download_file(url: str, dest: str) -> None:
+def download_file(
+    url: str,
+    dest: str,
+    max_retries: int | None = None,
+    retry_delay: float | None = None,
+    insecure: bool = False,
+) -> None:
     """Download *url* to *dest* with progress output, redirects, and retries.
 
     Uses multiple parallel Range connections when ``CD_DOWNLOAD_WORKERS > 1``
@@ -743,7 +899,7 @@ def download_file(url: str, dest: str) -> None:
     if connections > 1:
         # Probe with immediate spinner feedback
         with loading_line("Connecting..."):
-            probe = _probe_server(url, _ua_headers())
+            probe = _probe_server(url, _ua_headers(), insecure=insecure)
 
         if probe is None:
             log_info("Server probe failed, falling back to single connection.")
@@ -754,7 +910,7 @@ def download_file(url: str, dest: str) -> None:
         else:
             log_info(f"Range supported, content length {fmt_size(probe.content_length)}. Using segmented download.")
             try:
-                _download_multi(url, dest, probe, connections, bucket)
+                _download_multi(url, dest, probe, connections, bucket, insecure=insecure)
                 return
             except _FallbackToSingleError:
                 log_info("Segments too small for splitting, falling back to single connection.")
@@ -763,10 +919,23 @@ def download_file(url: str, dest: str) -> None:
                 raise
             except Exception as exc:
                 clear_bar()
+                host = urllib.parse.urlparse(url).netloc or url
+                if isinstance(exc, urllib.error.URLError):
+                    if not insecure and is_cert_verification_error(exc):
+                        raise RuntimeError(certificate_error_msg(host)) from exc
+                    if is_plaintext_http_tls_error(exc):
+                        raise RuntimeError(
+                            f"The URL '{url}' uses HTTPS, but the server at '{host}' "
+                            f"responded over plain HTTP (no TLS). If you trust this "
+                            f"source, retry with the same URL using the 'http://' "
+                            f"scheme instead."
+                        ) from exc
+                if isinstance(exc, urllib.error.HTTPError) and 400 <= exc.code < 500 and exc.code not in (408, 429):
+                    raise RuntimeError(f"Cannot download {url}: HTTP {exc.code} {exc.reason}") from exc
                 raise RuntimeError(f"Cannot download {url}: {exc}") from exc
 
     # Single-connection fallback
-    _download_single(url, dest, bucket)
+    _download_single(url, dest, bucket, insecure=insecure)
 
 
 def sha256_file(path: str) -> str:

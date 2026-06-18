@@ -181,6 +181,7 @@ def _install(sub):
         dest="override_arch",
         metavar="ARCH",
     )
+    p.add_argument("--allow-insecure", dest="insecure", action="store_true")
     p.add_argument("-q", "--quiet", action="store_true")
     p.add_argument("-h", "--help", action="store_true")
 
@@ -353,6 +354,7 @@ def _push(sub):
         dest="override_arch",
         metavar="ARCH",
     )
+    p.add_argument("--allow-insecure", dest="insecure", action="store_true")
     p.add_argument("-q", "--quiet", action="store_true")
     p.add_argument("-h", "--help", action="store_true")
 

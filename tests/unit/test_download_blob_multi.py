@@ -200,7 +200,7 @@ class TestDownloadBlobSegmented:
             )
 
             # Mock _download_segment to write part of the content to seg.tmp_path
-            def mock_download_segment(seg, url, headers, progress, abort, bucket=None, live_responses=None):
+            def mock_download_segment(seg, url, headers, progress, abort, bucket=None, live_responses=None, **kwargs):
                 with open(seg.tmp_path, "wb") as f:
                     f.write(content[seg.start : seg.end + 1])
 
@@ -238,7 +238,7 @@ class TestDownloadBlobSegmented:
             )
 
             # Write bad data
-            def mock_download_segment_bad(seg, url, headers, progress, abort, bucket=None, live_responses=None):
+            def mock_download_segment_bad(seg, url, headers, progress, abort, bucket=None, live_responses=None, **kwargs):
                 with open(seg.tmp_path, "wb") as f:
                     f.write(b"B" * (seg.end - seg.start + 1))
 
@@ -277,7 +277,7 @@ class TestDownloadBlobSegmented:
 
             captured_headers = []
 
-            def mock_dl_segment(seg, url, headers, progress, abort, bucket=None, live_responses=None):
+            def mock_dl_segment(seg, url, headers, progress, abort, bucket=None, live_responses=None, **kwargs):
                 captured_headers.append(headers)
                 with open(seg.tmp_path, "wb") as f:
                     f.write(content[seg.start : seg.end + 1])
@@ -335,7 +335,7 @@ class TestDownloadBlobSegmented:
             )
 
             # Mock _download_segment to fail
-            def mock_dl_segment_error(seg, url, headers, progress, abort, bucket=None):
+            def mock_dl_segment_error(seg, url, headers, progress, abort, bucket=None, **kwargs):
                 raise RuntimeError("segment download failed")
 
             # Mock single connection download as success
@@ -488,7 +488,7 @@ class TestDownloadBlobSegmented:
             )
 
             # Mock _download_segment to write part of the content
-            def mock_download_segment(seg, url, headers, progress, abort, bucket=None, live_responses=None):
+            def mock_download_segment(seg, url, headers, progress, abort, bucket=None, live_responses=None, **kwargs):
                 assert progress is not None
                 with open(seg.tmp_path, "wb") as f:
                     f.write(content[seg.start : seg.end + 1])
@@ -534,7 +534,7 @@ class TestDownloadBlobSegmented:
                 range_ok=True,
             )
 
-            def mock_download_segment_ki(seg, url, headers, progress, abort, bucket=None, live_responses=None):
+            def mock_download_segment_ki(seg, url, headers, progress, abort, bucket=None, live_responses=None, **kwargs):
                 raise KeyboardInterrupt
 
             from concurrent.futures import ThreadPoolExecutor

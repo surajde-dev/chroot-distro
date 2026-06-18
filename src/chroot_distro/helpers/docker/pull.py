@@ -26,10 +26,11 @@ from chroot_distro.helpers.docker.transport import (
     _ua,
     auth_denied_msg,
     auth_note,
-    auth_opener,
     get_auth_token,
+    opener,
     registry_base_url,
 )
+from chroot_distro.helpers.download import retry_http
 from chroot_distro.message import log_error, log_info
 from chroot_distro.progress import AggregateByteProgress, fmt_size
 
@@ -62,8 +63,9 @@ def _download_layers_parallel(
     repo: str,
     layers: list[dict[str, typing.Any]],
     token: str | None,
-    registry: str,
+    base: str,
     image_ref: str,
+    insecure: bool = False,
 ) -> None:
     """Download uncached layers, using a thread pool when more than one is missing."""
     n_layers = len(layers)
@@ -101,10 +103,11 @@ def _download_layers_parallel(
                 repo,
                 digest,
                 token or "",
-                registry,
+                base=base,
                 byte_progress=aggregate,
                 abort_event=abort_event,
                 connections=connections_per_layer,
+                insecure=insecure,
             )
         except urllib.error.HTTPError as dl_err:
             if dl_err.code in (401, 403):
@@ -140,16 +143,18 @@ def _download_layers_parallel(
             aggregate.clear()
 
 
-def _get_manifest(repo: str, ref: str, token: str, registry: str = "") -> dict[str, typing.Any]:
-    base = registry_base_url(registry)
+def _get_manifest(repo: str, ref: str, token: str, base: str, insecure: bool = False) -> dict[str, typing.Any]:
     url = f"{base}/v2/{repo}/manifests/{ref}"
     headers = {**_ua(), "Accept": _ACCEPT_HEADER}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as resp:
-        body = resp.read()
-        ct = resp.headers.get("Content-Type", "")
+
+    def _attempt():
+        with opener(insecure).open(req) as resp:
+            return resp.read(), resp.headers.get("Content-Type", "")
+
+    body, ct = typing.cast(tuple[bytes, str], retry_http(_attempt, what=f"Fetching manifest {ref}"))
     data: dict[str, typing.Any] = json.loads(body)
     data["_ct"] = ct.split(";")[0].strip() or data.get("mediaType", "")
     return data
@@ -190,15 +195,17 @@ def _pick_platform(
     )
 
 
-def _resolve_single_manifest(image_ref: str, arch: str) -> tuple[dict[str, typing.Any], str, str, str]:
-    """Return (single_image_manifest, token, repo, registry) for the arch."""
+def _resolve_single_manifest(
+    image_ref: str, arch: str, insecure: bool = False
+) -> tuple[dict[str, typing.Any], str, str, str]:
+    """Return (single_image_manifest, token, repo, base) for the arch."""
     registry, repo, tag = parse_image_ref(image_ref)
 
     log_info(f"Authenticating with registry{auth_note()}...")
-    token = get_auth_token(repo, registry)
+    token, base = get_auth_token(repo, registry, insecure=insecure)
 
     log_info(f"Fetching manifest for '{image_ref}'...")
-    manifest = _get_manifest(repo, tag, token, registry)
+    manifest = _get_manifest(repo, tag, token, base, insecure=insecure)
 
     if manifest["_ct"] in _MANIFEST_LIST_TYPES or "manifests" in manifest:
         docker_arch, docker_variant = ARCH_TO_DOCKER.get(arch, (arch, ""))
@@ -209,35 +216,43 @@ def _resolve_single_manifest(image_ref: str, arch: str) -> tuple[dict[str, typin
             image_ref,
         )
         log_info(f"Fetching {arch} manifest...")
-        manifest = _get_manifest(repo, target["digest"], token, registry)
+        manifest = _get_manifest(repo, target["digest"], token, base, insecure=insecure)
 
-    return manifest, token, repo, registry
+    return manifest, token, repo, base
 
 
-def _fetch_config_blob(repo: str, cfg_digest: str, token: str, registry: str = "") -> dict[str, typing.Any]:
+def _fetch_config_blob(
+    repo: str, cfg_digest: str, token: str, base: str, insecure: bool = False
+) -> dict[str, typing.Any]:
     """Fetch the image config blob; return parsed dict (empty on error)."""
     if not cfg_digest:
         return {}
     try:
-        base = registry_base_url(registry)
         url = f"{base}/v2/{repo}/blobs/{cfg_digest}"
         headers = {**_ua()}
         if token:
             headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(url, headers=headers)
-        with auth_opener().open(req) as resp:
-            result: dict[str, typing.Any] = json.loads(resp.read())
-            return result
+
+        def _attempt():
+            with opener(insecure).open(req) as resp:
+                return resp.read()
+
+        result: dict[str, typing.Any] = json.loads(
+            typing.cast(bytes, retry_http(_attempt, what="Fetching image config"))
+        )
+        return result
     except Exception:
         return {}
 
 
-def pull_image(image_ref: str, rootfs_dir: str, arch: str) -> dict[str, typing.Any]:
+def pull_image(image_ref: str, rootfs_dir: str, arch: str, insecure: bool = False) -> dict[str, typing.Any]:
     """Pull an OCI/Docker image and extract all layers into *rootfs_dir*.
 
     The manifest is checked in the local cache first.
     """
     token = None
+    base = None
 
     manifest, repo, image_config = load_manifest_cache(image_ref, arch)
     registry = parse_image_ref(image_ref)[0]
@@ -252,7 +267,7 @@ def pull_image(image_ref: str, rootfs_dir: str, arch: str) -> dict[str, typing.A
             log_info(f"Downloading {missing} missing layer(s) for '{image_ref}' ({arch})...")
             try:
                 log_info(f"Authenticating with registry{auth_note()}...")
-                token = get_auth_token(repo, registry)
+                token, base = get_auth_token(repo, registry, insecure=insecure)
             except (urllib.error.URLError, OSError) as net_err:
                 if isinstance(net_err, urllib.error.HTTPError):
                     if net_err.code in (401, 403):
@@ -265,7 +280,7 @@ def pull_image(image_ref: str, rootfs_dir: str, arch: str) -> dict[str, typing.A
                 raise RuntimeError(f"Network error: {net_err}") from net_err
     else:
         try:
-            manifest, token, repo, registry = _resolve_single_manifest(image_ref, arch)
+            manifest, token, repo, base = _resolve_single_manifest(image_ref, arch, insecure=insecure)
         except (urllib.error.URLError, OSError) as net_err:
             if isinstance(net_err, urllib.error.HTTPError):
                 if net_err.code in (401, 403):
@@ -275,15 +290,18 @@ def pull_image(image_ref: str, rootfs_dir: str, arch: str) -> dict[str, typing.A
             log_error(f"No cached manifest found for '{image_ref}' ({arch}).")
             raise RuntimeError(f"Network error: {net_err}") from net_err
         cfg_digest = manifest.get("config", {}).get("digest", "")
-        image_config = _fetch_config_blob(repo, cfg_digest, token, registry)
+        image_config = _fetch_config_blob(repo, cfg_digest, token, base, insecure=insecure)
         save_manifest_cache(image_ref, arch, manifest, repo, image_config)
 
     layers = manifest.get("layers", [])
     if not layers:
         raise RuntimeError(f"Manifest for '{image_ref}' contains no filesystem layers.")
 
+    if base is None:
+        base = registry_base_url(registry, insecure=insecure)
+
     n_layers = len(layers)
-    _download_layers_parallel(repo, layers, token, registry, image_ref)
+    _download_layers_parallel(repo, layers, token, base, image_ref, insecure=insecure)
 
     for i, layer in enumerate(layers):
         digest = layer["digest"]

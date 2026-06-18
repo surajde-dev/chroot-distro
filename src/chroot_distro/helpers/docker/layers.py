@@ -7,7 +7,6 @@ import shutil
 import signal
 import ssl
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +17,7 @@ from chroot_distro.helpers.docker.cache import layer_cache_path
 from chroot_distro.helpers.docker.transport import (
     _ua,
     auth_opener,
+    opener,
     registry_base_url,
 )
 from chroot_distro.helpers.download import (
@@ -29,9 +29,10 @@ from chroot_distro.helpers.download import (
     _probe_url,
     _ProbeResult,
     _Segment,
+    is_retryable_http_error,
+    retry_http,
 )
 from chroot_distro.helpers.tar_extract import extract_tar_to_rootfs
-from chroot_distro.message import warn
 from chroot_distro.progress import REDRAW_THRESHOLD_BYTES, AggregateByteProgress, clear_bar, draw_bytes_bar
 
 _MAX_RETRIES = 3
@@ -55,29 +56,19 @@ _RETRYABLE = (
 
 def _is_retryable(exc: BaseException) -> bool:
     """Return True if *exc* looks like a transient network failure."""
-    if isinstance(exc, urllib.error.HTTPError):
-        # Only retry on 5xx (server-side) errors; 4xx are permanent.
-        return exc.code >= 500
-    if isinstance(exc, (FileNotFoundError, PermissionError)):
-        return False
-    if isinstance(exc, _RETRYABLE):
-        return True
-    if isinstance(exc, urllib.error.URLError):
-        # The inner reason is usually an ssl.SSLError or OSError.
-        return isinstance(exc.reason, _RETRYABLE)
-    return False
+    return is_retryable_http_error(exc)
 
 
-def _probe_blob(url: str, headers: dict[str, str]) -> _ProbeResult | None:
+def _probe_blob(url: str, headers: dict[str, str], insecure: bool = False) -> _ProbeResult | None:
     """Send HEAD (or fallback GET Range:0-0) to discover size + Range support.
 
-    Uses ``auth_opener()`` so that registry auth tokens and cross-host
-    redirect stripping are handled correctly.
+    Uses ``auth_opener()`` (or ``opener(insecure)``) so that registry auth tokens
+    and cross-host redirect stripping are handled correctly.
 
     Returns *None* on any network error so the caller can fall back silently.
     """
-    opener = auth_opener()
-    open_fn = functools.partial(opener.open, timeout=_SOCKET_TIMEOUT)
+    op = auth_opener() if not insecure else opener(insecure)
+    open_fn = functools.partial(op.open, timeout=_SOCKET_TIMEOUT)
     return _probe_url(url, headers, open_fn=open_fn)
 
 
@@ -85,11 +76,12 @@ def download_blob(
     repo: str,
     digest: str,
     token: str,
-    registry: str = "",
+    base: str = "",
     *,
     byte_progress: AggregateByteProgress | None = None,
     abort_event: threading.Event | None = None,
     connections: int = 1,
+    insecure: bool = False,
 ) -> str:
     """Download a blob to the layer cache; return the local file path.
 
@@ -103,7 +95,6 @@ def download_blob(
     from chroot_distro.rate_limit import TokenBucket
 
     max_retries = download_max_retries()
-    retry_backoff = tuple(min(2**i, 30) for i in range(max_retries))
     rate = download_rate_limit()
     bucket = TokenBucket(rate) if rate > 0 else None
 
@@ -118,8 +109,11 @@ def download_blob(
     if algo.lower() != "sha256":
         raise RuntimeError(f"Unsupported layer digest algorithm '{algo}' (only sha256 is supported).")
 
-    base = registry_base_url(registry)
-    url = f"{base}/v2/{repo}/blobs/{digest}"
+    if base and base.startswith(("http://", "https://")):
+        url_base = base
+    else:
+        url_base = registry_base_url(base or "", insecure=insecure)
+    url = f"{url_base}/v2/{repo}/blobs/{digest}"
 
     if connections > 1:
         chunks_meta_path = f"{dest}.chunks.json"
@@ -128,7 +122,7 @@ def download_blob(
             probe_headers = {**_ua()}
             if token:
                 probe_headers["Authorization"] = f"Bearer {token}"
-            probe = _probe_blob(url, probe_headers)
+            probe = _probe_blob(url, probe_headers, insecure=insecure)
 
             if probe is not None and probe.range_ok and probe.content_length > 0:
                 if os.path.isfile(chunks_meta_path):
@@ -219,6 +213,7 @@ def download_blob(
                                 local_abort,
                                 bucket,
                                 live_responses,
+                                insecure=insecure,
                             ): seg
                             for seg in segments
                         }
@@ -277,28 +272,22 @@ def download_blob(
         except Exception:
             raise
 
-    last_exc: BaseException | None = None
-    for attempt in range(max_retries + 1):
-        if attempt > 0:
-            delay = retry_backoff[attempt - 1] if attempt - 1 < len(retry_backoff) else 30
-            warn(f"Retry {attempt}/{max_retries} in {delay}s (reason: {last_exc})...")
-            time.sleep(delay)
+    headers = {**_ua()}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
 
-        headers = {**_ua()}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        req = urllib.request.Request(url, headers=headers)
+    def _attempt():
         hasher = hashlib.sha256()
-
-        try:
-            with atomic_replace(dest) as tmp:
-                opener = auth_opener()
-                with opener.open(req, timeout=_SOCKET_TIMEOUT) as resp, open(tmp, "wb") as fh:
-                    total = int(resp.headers.get("Content-Length", 0))
-                    downloaded = 0
-                    unsent = 0  # bytes not yet reported to aggregate
-                    if byte_progress is None:
-                        draw_bytes_bar(0, total, noun="downloaded")
+        with atomic_replace(dest) as tmp:
+            op = auth_opener() if not insecure else opener(insecure)
+            with op.open(req, timeout=_SOCKET_TIMEOUT) as resp, open(tmp, "wb") as fh:
+                total = int(resp.headers.get("Content-Length", 0))
+                downloaded = 0
+                unsent = 0  # bytes not yet reported to aggregate
+                if byte_progress is None:
+                    draw_bytes_bar(0, total, noun="downloaded")
+                try:
                     while True:
                         if abort_event is not None and abort_event.is_set():
                             raise KeyboardInterrupt
@@ -323,32 +312,22 @@ def download_blob(
                         byte_progress.add(unsent)
                     fh.flush()
                     os.fsync(fh.fileno())
-                actual_hex = hasher.hexdigest()
-                if actual_hex != expected_hex.lower():
-                    raise RuntimeError(
-                        f"Layer integrity check failed for digest '{digest}': "
-                        f"expected {expected_hex}, got {actual_hex}."
-                    )
-        except KeyboardInterrupt:
-            if byte_progress is None:
-                clear_bar()
-            raise
-        except BaseException as exc:
-            if byte_progress is None:
-                clear_bar()
-            if _is_retryable(exc) and attempt < max_retries:
-                last_exc = exc
-                continue
-            raise
-        else:
-            if byte_progress is None:
-                clear_bar()
-            return dest
+                finally:
+                    if byte_progress is None:
+                        clear_bar()
+            actual_hex = hasher.hexdigest()
+            if actual_hex != expected_hex.lower():
+                raise RuntimeError(
+                    f"Layer integrity check failed for digest '{digest}': expected {expected_hex}, got {actual_hex}."
+                )
 
-    # Should never reach here, but satisfy the type checker.
-    raise RuntimeError(  # pragma: no cover
-        f"Download failed for '{digest}' after {max_retries} retries."
+    retry_http(
+        _attempt,
+        what=f"Downloading layer {expected_hex[:12]}",
+        max_retries=max_retries,
+        retry_delay=5,
     )
+    return dest
 
 
 def apply_layer(layer_path: str, rootfs_dir: str) -> None:
