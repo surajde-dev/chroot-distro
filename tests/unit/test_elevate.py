@@ -46,20 +46,26 @@ def test_get_reexec_argv_python_script():
 
 @patch("chroot_distro.elevate.IS_TERMUX", True)
 def test_find_escalation_tool_termux():
-    # Termux default: su first, then sudo
-    with patch("shutil.which", side_effect=lambda cmd: "/usr/bin/" + cmd if cmd in ("sudo", "su") else None):
-        assert _find_escalation_tool() == ["su", "-c"]
+    # Termux: sudo -> doas -> pkexec -> su
+    # 1. sudo available
+    with patch(
+        "shutil.which", side_effect=lambda cmd: "/usr/bin/" + cmd if cmd in ("sudo", "doas", "pkexec", "su") else None
+    ):
+        assert _find_escalation_tool() == ["sudo"]
 
-    # Termux with use_sudo=True: sudo first, then su
-    with patch("shutil.which", side_effect=lambda cmd: "/usr/bin/" + cmd if cmd in ("sudo", "su") else None):
-        assert _find_escalation_tool(use_sudo=True) == ["sudo"]
+    # 2. doas available (no sudo)
+    with patch("shutil.which", side_effect=lambda cmd: "/usr/bin/" + cmd if cmd in ("doas", "pkexec", "su") else None):
+        assert _find_escalation_tool() == ["doas", "--"]
 
+    # 3. pkexec available (no sudo, no doas)
+    with patch("shutil.which", side_effect=lambda cmd: "/usr/bin/" + cmd if cmd in ("pkexec", "su") else None):
+        assert _find_escalation_tool() == ["pkexec", "--disable-internal-agent"]
+
+    # 4. su available (no sudo, doas, pkexec)
     with patch("shutil.which", side_effect=lambda cmd: "/usr/bin/" + cmd if cmd == "su" else None):
         assert _find_escalation_tool() == ["su", "-c"]
 
-    with patch("shutil.which", side_effect=lambda cmd: "/usr/bin/" + cmd if cmd == "sudo" else None):
-        assert _find_escalation_tool() == ["sudo"]
-
+    # 5. none available
     with patch("shutil.which", return_value=None):
         assert _find_escalation_tool() is None
 

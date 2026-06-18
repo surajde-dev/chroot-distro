@@ -34,25 +34,15 @@ def get_reexec_argv() -> list[str]:
 
 def _find_escalation_tool(use_sudo: bool = False) -> list[str] | None:
     """Find the best escalation tool depending on the environment."""
-    if IS_TERMUX:
-        # In Termux, prefer 'su' (real root) over 'sudo' (which might be fake root via proot).
-        # If use_sudo is True, we try 'sudo' first.
-        tools = ["su", "sudo"] if not use_sudo else ["sudo", "su"]
-        for tool in tools:
-            if tool == "su" and shutil.which("su"):
-                return ["su", "-c"]
-            if tool == "sudo" and shutil.which("sudo"):
-                return ["sudo"]
-    else:
-        # In normal Linux, try sudo -> doas -> pkexec -> su in order of preference.
-        if shutil.which("sudo"):
-            return ["sudo", "-E"]
-        if shutil.which("doas"):
-            return ["doas", "--"]
-        if shutil.which("pkexec"):
-            return ["pkexec", "--disable-internal-agent"]
-        if shutil.which("su"):
-            return ["su", "-c"]
+    # Try sudo -> doas -> pkexec -> su in order of preference.
+    if shutil.which("sudo"):
+        return ["sudo"] if IS_TERMUX else ["sudo", "-E"]
+    if shutil.which("doas"):
+        return ["doas", "--"]
+    if shutil.which("pkexec"):
+        return ["pkexec", "--disable-internal-agent"]
+    if shutil.which("su"):
+        return ["su", "-c"]
 
     return None
 
