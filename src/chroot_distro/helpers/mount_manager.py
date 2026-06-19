@@ -287,6 +287,12 @@ def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
             )
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip() if hasattr(e, "stderr") else ""
+        # "not mounted" means the mount is already gone (e.g. it was
+        # shadowed by a parent bind mount and became unreachable). Treat
+        # it as a successful unmount rather than escalating to lazy/error.
+        if "not mounted" in stderr:
+            log.debug("umount reports '%s' is not mounted; treating as already unmounted.", target)
+            return
         if _is_recursive_bind_target(target):
             log.debug("Standard umount failed for %s (%s); using lazy umount.", target, stderr)
         else:
@@ -302,6 +308,9 @@ def safe_unmount(target: str, holder: NamespaceHolder | None = None) -> None:
                 )
         except subprocess.CalledProcessError as e_lazy:
             lazy_stderr = (e_lazy.stderr or "").strip() if hasattr(e_lazy, "stderr") else ""
+            if "not mounted" in lazy_stderr:
+                log.debug("Lazy umount reports '%s' is not mounted; treating as already unmounted.", target)
+                return
             raise MountError(f"Failed to unmount {target} (lazy umount also failed): {lazy_stderr}") from e_lazy
 
 

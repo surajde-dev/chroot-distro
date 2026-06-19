@@ -479,6 +479,18 @@ def get_bindings(
 
     # 2. Android-specific bindings (system and storage)
     if IS_TERMUX and not isolated:
+        # Parent directories (/data, TERMUX_PREFIX) MUST be bound before any
+        # child paths (dalvik caches, termux app dirs, etc.). If a child bind
+        # is applied first and the parent is bound afterwards, the parent mount
+        # shadows the child — the kernel still tracks the child mount in
+        # /proc/mounts but it becomes unreachable, so umount fails with
+        # "not mounted" on cleanup.
+        if dist_type != "termux":
+            if os.path.isdir("/data"):
+                binds.append(("/data", "/data"))
+            if os.path.exists(TERMUX_PREFIX):
+                binds.append((TERMUX_PREFIX, TERMUX_PREFIX))
+
         # Dalvik/ART caches and shared storage are host-domain Android
         # paths bound for both distro types in the default mode.
         for src, dst in dalvik_cache_bindings():
@@ -491,14 +503,9 @@ def get_bindings(
             for src, dst in system_bindings():
                 binds.append((src, dst))
 
-        # The Termux app's private dirs and host /data / TERMUX_PREFIX bridge
-        # are bound only for normal-type containers. A termux-type guest ships
-        # its own /data/data/com.termux and must never see the host's.
+        # Termux app's private dirs. A termux-type guest ships its own
+        # /data/data/com.termux and must never see the host's.
         if dist_type != "termux":
-            if os.path.isdir("/data"):
-                binds.append(("/data", "/data"))
-            if os.path.exists(TERMUX_PREFIX):
-                binds.append((TERMUX_PREFIX, TERMUX_PREFIX))
             for src, dst in termux_app_bindings():
                 binds.append((src, dst))
 
