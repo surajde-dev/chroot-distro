@@ -128,9 +128,7 @@ def _termux_host_info() -> _HostInfo:
     """Collect Termux app + Android OS facts."""
     fields: list[tuple[str, str]] = []
 
-    termux_version = (
-        os.environ.get("TERMUX_APP__APP_VERSION_NAME") or os.environ.get("TERMUX_VERSION") or _NA
-    )
+    termux_version = os.environ.get("TERMUX_APP__APP_VERSION_NAME") or os.environ.get("TERMUX_VERSION") or _NA
     fields.append(("Termux version", termux_version))
     fields.append(("Termux package", TERMUX_APP_PACKAGE))
 
@@ -379,10 +377,7 @@ def _has_rootfs_structure(rootfs: str) -> bool:
     A valid rootfs has at least one of the common top-level directories.
     Distroless/minimal images may omit /etc entirely, so this stays lenient.
     """
-    for entry in ("bin", "usr", "sbin", "lib", "etc", "system"):
-        if os.path.isdir(os.path.join(rootfs, entry)):
-            return True
-    return False
+    return any(os.path.isdir(os.path.join(rootfs, entry)) for entry in ("bin", "usr", "sbin", "lib", "etc", "system"))
 
 
 def _analyze_image(info: _ImageInfo, host_arch: str) -> None:
@@ -402,9 +397,13 @@ def _analyze_image(info: _ImageInfo, host_arch: str) -> None:
         # is no longer required.
         info.findings.append("no recognizable rootfs layout (install may be incomplete)")
 
-    if info.arch not in (_NA, "") and host_arch not in (_NA, ""):
-        if info.arch != host_arch and not (host_arch in ("x86_64", "aarch64") and info.arch in ("i686", "arm")):
-            info.findings.append(f"arch '{info.arch}' differs from host '{host_arch}' (needs emulation)")
+    if (
+        info.arch not in (_NA, "")
+        and host_arch not in (_NA, "")
+        and info.arch != host_arch
+        and not (host_arch in ("x86_64", "aarch64") and info.arch in ("i686", "arm"))
+    ):
+        info.findings.append(f"arch '{info.arch}' differs from host '{host_arch}' (needs emulation)")
 
 
 def _gather_images(host_arch: str) -> list[_ImageInfo]:
@@ -583,10 +582,7 @@ def command_info(args) -> None:
     _render_analysis(images)
 
     msg()
-    msg(
-        f"  {C['CYAN']}Report issues at "
-        f"https://github.com/sabamdarif/chroot-distro/issues{C['RST']}"
-    )
+    msg(f"  {C['CYAN']}Report issues at https://github.com/sabamdarif/chroot-distro/issues{C['RST']}")
     msg()
 
 
