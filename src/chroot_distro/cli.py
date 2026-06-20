@@ -10,6 +10,7 @@ from chroot_distro.commands.clear_cache import command_clear_cache
 from chroot_distro.commands.copy import command_copy
 from chroot_distro.commands.diff import command_diff
 from chroot_distro.commands.help import HELP_COMMANDS, command_help
+from chroot_distro.commands.info import command_info
 from chroot_distro.commands.install import command_install
 from chroot_distro.commands.kill import command_kill
 from chroot_distro.commands.list_cmd import command_list
@@ -59,6 +60,7 @@ _COMMAND_HANDLERS = {
     "ps": command_ps,
     "diff": command_diff,
     "search": command_search,
+    "info": command_info,
     "help": command_help,
 }
 
@@ -189,7 +191,7 @@ def main() -> None:
     # `search` is network-only and never needs root. `ps` and `list` only read
     # /proc and container metadata, so they are exempt on Termux like `help`.
     requires_root = False
-    if canonical in ("help", "search"):
+    if canonical in ("help", "search", "info"):
         requires_root = False
     elif IS_TERMUX:
         if canonical not in ("list", "ps"):

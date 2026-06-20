@@ -67,6 +67,8 @@ ALIAS_TO_CANONICAL = {
     "stop": "kill",
     "find": "search",
     "se": "search",
+    "version-info": "info",
+    "nf": "info",
     "h": "help",
     "he": "help",
     "hel": "help",
@@ -164,6 +166,7 @@ def build_parser() -> _CdArgumentParser:
     _ps(sub)
     _diff(sub)
     _search(sub)
+    _info(sub)
 
     return parser
 
@@ -405,4 +408,10 @@ def _search(sub):
     p.add_argument("term", nargs="?", default=None)
     p.add_argument("-l", "--limit", type=int, default=25, metavar="N")
     p.add_argument("-q", "--quiet", action="store_true")
+    p.add_argument("-h", "--help", action="store_true")
+
+
+def _info(sub):
+    p = sub.add_parser("info", aliases=["version-info", "nf"], add_help=False)
+    p._cd_command = "info"
     p.add_argument("-h", "--help", action="store_true")
