@@ -188,8 +188,10 @@ def main() -> None:
     # Root check requirement:
     # - In normal Linux: all commands require root except "help"
     # - In Termux: all commands require root except "list" and "help"
-    # `search` is network-only and never needs root. `ps` and `list` only read
-    # /proc and container metadata, so they are exempt on Termux like `help`.
+    # `search` is network-only and never needs root. `ps`, `list`, and `info`
+    # only read /proc and container metadata, so they are exempt on Termux like
+    # `help`. On Linux containers are installed by root and live in root's data
+    # dir, so these commands still elevate there to read the right location.
     requires_root = False
     if canonical in ("help", "search"):
         requires_root = False

@@ -326,7 +326,9 @@ def command_info(args) -> None:
     """Print a structured diagnostics report for bug reports and support.
 
     Read-only: collects program, host (Linux distro or Termux/Android), and
-    per-image facts plus lightweight analysis. Never requires root.
+    per-image facts plus lightweight analysis. Like ``list``/``ps`` it is
+    rootless on Termux, but elevates on regular Linux so it inspects the same
+    root-owned data directory where containers are installed.
     """
     host_arch = get_device_cpu_arch()
     host = _gather_host_info()

@@ -660,7 +660,9 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
             "  Analysis Lightweight checks per image: architecture mismatch "
             "against the host, missing manifest, empty or unusual rootfs."
             "\n\n"
-            "Read-only and never requires root."
+            "Read-only. Like 'list' it is rootless on Termux, but elevates on "
+            "regular Linux to read the root-owned data directory where "
+            "containers are installed."
         ),
         "options": [
             ("-h, --help", "Show this help."),
