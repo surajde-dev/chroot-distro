@@ -191,10 +191,10 @@ def main() -> None:
     # `search` is network-only and never needs root. `ps` and `list` only read
     # /proc and container metadata, so they are exempt on Termux like `help`.
     requires_root = False
-    if canonical in ("help", "search", "info"):
+    if canonical in ("help", "search"):
         requires_root = False
     elif IS_TERMUX:
-        if canonical not in ("list", "ps"):
+        if canonical not in ("list", "ps", "info"):
             requires_root = True
     else:
         requires_root = True
