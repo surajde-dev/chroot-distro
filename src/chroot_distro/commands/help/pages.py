@@ -654,7 +654,7 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
             "  Host     On Termux: Termux version, Android release/SDK, device. "
             "On Linux: distribution name/version, kernel, libc. Host CPU "
             "architecture and 32-bit support are shown in both cases.\n"
-  Capabilities Host checks that affect launching containers: "
+            "  Capabilities Host checks that affect launching containers: "
             "privilege-escalation tool (sudo/doas/pkexec/su), Termux /data "
             "suid/exec flags, binfmt_misc + QEMU for foreign architectures, "
             "unshare/nsenter and user-namespace support, free disk space on "
