@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import shlex
+import signal
 import subprocess
 import sys
 
@@ -796,6 +797,8 @@ def _command_login_inner(container_name: str, args) -> None:
 
     use_namespaces = isolated and not minimal
     holder = None
+    pipe_w = None
+    chroot_args = None
 
     # Namespace isolation is all-or-nothing: probe the full requested set
     # before touching the session counter or any mount. If any namespace is
@@ -828,7 +831,28 @@ def _command_login_inner(container_name: str, args) -> None:
         if sess_count == 1:
             if use_namespaces:
                 try:
-                    holder = namespace.acquire_holder(container_name)
+                    if run_inner is not None:
+                        chroot_args = build_chroot_args(
+                            rootfs=rootfs,
+                            login_uid=login_uid,
+                            login_gid=login_gid,
+                            groups=groups,
+                            workdir=login_wd,
+                            inner_cmd=inner,
+                            is_run=True,
+                        )
+                        pipe_r, pipe_w = os.pipe()
+                        try:
+                            holder = namespace.acquire_holder(
+                                container_name,
+                                holder_cmd=chroot_args,
+                                pipe_r=pipe_r,
+                                env=child_env,
+                            )
+                        finally:
+                            os.close(pipe_r)
+                    else:
+                        holder = namespace.acquire_holder(container_name)
                     namespace.write_isolation_mode(container_name, namespace.ISOLATION_MODE_NAMESPACE)
                     if not namespace.make_mount_private(holder):
                         # Many Android kernels already provide an isolated
@@ -841,6 +865,9 @@ def _command_login_inner(container_name: str, args) -> None:
                     # never fail the login if no hostname binary exists.
                     namespace.set_namespace_hostname(holder, _safe_hostname(hostname_arg))
                 except NamespaceError as exc:
+                    if pipe_w is not None:
+                        with contextlib.suppress(OSError):
+                            os.close(pipe_w)
                     session.decrement(container_name, lock_fh=lock_fh)
                     crit_error(str(exc))
                     sys.exit(1)
@@ -881,6 +908,9 @@ def _command_login_inner(container_name: str, args) -> None:
                         options=mount_options,
                     )
                 except Exception as e:
+                    if pipe_w is not None:
+                        with contextlib.suppress(OSError):
+                            os.close(pipe_w)
                     mount_manager.unmount_all(rootfs, holder=holder)
                     if holder is not None:
                         namespace.release_holder(container_name)
@@ -916,6 +946,9 @@ def _command_login_inner(container_name: str, args) -> None:
                 for sm in specials:
                     mount_manager.apply_special_mount(rootfs, sm, holder=holder)
             except Exception as e:
+                if pipe_w is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(pipe_w)
                 mount_manager.unmount_all(rootfs, holder=holder)
                 if holder is not None:
                     namespace.release_holder(container_name)
@@ -946,6 +979,15 @@ def _command_login_inner(container_name: str, args) -> None:
                 from chroot_distro.message import log_info
 
                 log_info(f"Image declares exposed ports: {', '.join(exposed)}")
+
+            # Trigger the holder to start execution by closing the pipe
+            if pipe_w is not None:
+                try:
+                    os.write(pipe_w, b"\n")
+                    os.close(pipe_w)
+                    pipe_w = None
+                except OSError:
+                    pass
         else:
             # Not the first session: bind mounts are NOT re-applied, so any
             # mount-affecting flag passed now is silently ignored because the
@@ -991,15 +1033,16 @@ def _command_login_inner(container_name: str, args) -> None:
                 rootfs,
             )
 
-    chroot_args = build_chroot_args(
-        rootfs=rootfs,
-        login_uid=login_uid,
-        login_gid=login_gid,
-        groups=groups,
-        workdir=login_wd,
-        inner_cmd=inner,
-        is_run=run_inner is not None,
-    )
+    if chroot_args is None:
+        chroot_args = build_chroot_args(
+            rootfs=rootfs,
+            login_uid=login_uid,
+            login_gid=login_gid,
+            groups=groups,
+            workdir=login_wd,
+            inner_cmd=inner,
+            is_run=run_inner is not None,
+        )
 
     exec_argv = chroot_args
     if holder is not None:
@@ -1021,16 +1064,38 @@ def _command_login_inner(container_name: str, args) -> None:
                     namespace.clear_isolation_mode(container_name)
         sys.exit(0)
 
-    try:
-        subprocess.run(exec_argv, env=child_env, check=False)
-    finally:
-        with session.lock(container_name) as lock_fh:
-            sess_count = session.decrement(container_name, lock_fh=lock_fh)
-            if sess_count == 0:
-                mount_manager.unmount_all(rootfs, holder=holder)
-                if holder is not None:
-                    namespace.release_holder(container_name)
-                    namespace.clear_isolation_mode(container_name)
+    if holder is not None and holder.proc is not None:
+        try:
+            holder.proc.wait()
+        except KeyboardInterrupt:
+            with contextlib.suppress(OSError):
+                holder.proc.send_signal(signal.SIGINT)
+            try:
+                holder.proc.wait(timeout=5)
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                with contextlib.suppress(OSError):
+                    holder.proc.kill()
+                with contextlib.suppress(OSError):
+                    holder.proc.wait()
+        finally:
+            with session.lock(container_name) as lock_fh:
+                sess_count = session.decrement(container_name, lock_fh=lock_fh)
+                if sess_count == 0:
+                    mount_manager.unmount_all(rootfs, holder=holder)
+                    if holder is not None:
+                        namespace.release_holder(container_name)
+                        namespace.clear_isolation_mode(container_name)
+    else:
+        try:
+            subprocess.run(exec_argv, env=child_env, check=False)
+        finally:
+            with session.lock(container_name) as lock_fh:
+                sess_count = session.decrement(container_name, lock_fh=lock_fh)
+                if sess_count == 0:
+                    mount_manager.unmount_all(rootfs, holder=holder)
+                    if holder is not None:
+                        namespace.release_holder(container_name)
+                        namespace.clear_isolation_mode(container_name)
 
 
 __all__ = ("command_login",)

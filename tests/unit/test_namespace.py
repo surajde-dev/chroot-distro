@@ -318,3 +318,39 @@ def test_create_holder_fails_and_cleans_up(mock_remove_state, mock_pick, mock_po
 def test_release_holder_exception_safety(mock_kill, mock_read, mock_remove_state):
     ns.release_holder("alpine")
     mock_remove_state.assert_called_once_with("alpine")
+
+
+@patch("chroot_distro.helpers.namespace.subprocess.Popen")
+@patch("chroot_distro.helpers.namespace._remove_holder_state")
+@patch("chroot_distro.helpers.namespace._get_process_start_time", return_value=12345.67)
+@patch("chroot_distro.helpers.namespace._read_host_child_pids", return_value=[555])
+@patch("chroot_distro.helpers.namespace._nsenter_supports_long_flags", return_value=True)
+def test_create_holder_with_custom_cmd(mock_nsenter, mock_read_child, mock_start, mock_remove, mock_popen):
+    mock_proc = MagicMock(pid=444)
+    mock_popen.return_value = mock_proc
+
+    m_open = mock_open()
+    with patch("builtins.open", m_open):
+        holder = ns._create_holder("alpine", ["--mount", "--pid"], holder_cmd=["chroot", "rootfs", "/init"], pipe_r=3)
+
+    assert holder.pid == 555
+    assert holder.proc == mock_proc
+    pid_file_call = [c for c in m_open.mock_calls if "holder.pid" in str(c)]
+    assert pid_file_call
+
+
+@patch("chroot_distro.helpers.namespace._remove_holder_state")
+@patch("chroot_distro.helpers.namespace.os.path.isfile", return_value=True)
+def test_read_holder_pid_custom_success(mock_isfile, mock_remove_state):
+    patch("builtins.open", mock_open(read_data="42\n12345.67\ncustom\n")).start()
+    try:
+        with (
+            patch("chroot_distro.helpers.namespace._pid_alive", return_value=True),
+            patch("chroot_distro.helpers.namespace._is_sleep_infinity_holder", return_value=False),
+            patch("chroot_distro.helpers.namespace._get_process_start_time", return_value=12345.67),
+        ):
+            assert ns._read_holder_pid("alpine") == 42
+            mock_remove_state.assert_not_called()
+    finally:
+        patch.stopall()
+

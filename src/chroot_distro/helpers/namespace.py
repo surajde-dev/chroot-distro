@@ -200,13 +200,16 @@ def _read_holder_pid(container_name: str) -> int | None:
 
     pid: int | None = None
     start_time: float | None = None
+    is_custom = False
     try:
         with open(path) as fh:
             lines = fh.read().splitlines()
             if lines:
                 pid = int(lines[0].strip())
-                if len(lines) > 1:
+                if len(lines) > 1 and lines[1].strip():
                     start_time = float(lines[1].strip())
+                if len(lines) > 2 and lines[2].strip() == "custom":
+                    is_custom = True
     except (OSError, ValueError):
         _remove_holder_state(container_name)
         return None
@@ -216,12 +219,14 @@ def _read_holder_pid(container_name: str) -> int | None:
         return None
 
     is_valid = True
-    if not _pid_alive(pid) or not _is_sleep_infinity_holder(pid):
+    if not _pid_alive(pid):
         is_valid = False
     elif start_time is not None:
         curr_start_time = _get_process_start_time(pid)
         if curr_start_time is None or abs(curr_start_time - start_time) > 0.1:
             is_valid = False
+    elif not is_custom and not _is_sleep_infinity_holder(pid):
+        is_valid = False
 
     if not is_valid:
         _remove_holder_state(container_name)
@@ -295,6 +300,26 @@ def _read_host_child_pids(pid: int) -> list[int]:
     return children
 
 
+def _snapshot_all_pids() -> set[int]:
+    pids: set[int] = set()
+    try:
+        for entry in os.listdir("/proc"):
+            if entry.isdigit():
+                pids.add(int(entry))
+    except OSError:
+        pass
+    return pids
+
+
+def _is_custom_holder(pid: int, pipe_r: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            cmdline = fh.read().decode("utf-8", errors="ignore").replace("\0", " ")
+    except OSError:
+        return False
+    return f"os.read({pipe_r}, 1)" in cmdline
+
+
 def _descendant_sleep_holders(launcher_pid: int, max_depth: int = 4) -> list[int]:
     """Return ``sleep infinity`` holders reachable from *launcher_pid*.
 
@@ -353,6 +378,7 @@ class NamespaceHolder:
     nsenter_flags: list[str]
     nsenter_exe: str
     container_name: str
+    proc: subprocess.Popen | None = None
 
     def run_argv(self, cmd: list[str]) -> list[str]:
         return [self.nsenter_exe, "--target", str(self.pid), *self.nsenter_flags, "--", *cmd]
@@ -401,32 +427,81 @@ def _holder_unshare_argv(unshare: str, flags: list[str]) -> list[str]:
     return argv
 
 
-def _create_holder(container_name: str, flags: list[str]) -> NamespaceHolder:
+def _create_holder(
+    container_name: str,
+    flags: list[str],
+    holder_cmd: list[str] | None = None,
+    pipe_r: int | None = None,
+    env: dict | None = None,
+) -> NamespaceHolder:
     unshare = _resolve_unshare()
     pid_file = _holder_pid_file(container_name)
     flags_file = _holder_flags_file(container_name)
 
     _remove_holder_state(container_name)
 
+    before_pids = _snapshot_all_pids()
     before_sleep = _snapshot_sleep_infinity_pids()
-    unshare_argv = _holder_unshare_argv(unshare, flags)
-    proc = subprocess.Popen(
-        unshare_argv,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
+    if holder_cmd:
+        assert pipe_r is not None
+        # Construct a python synchronization script to exec the custom command
+        # after reading from the synchronization pipe descriptor.
+        # Ensure we only exec if we receive the success newline byte from the parent.
+        python_script = (
+            "import os, sys\n"
+            f"data = os.read({pipe_r}, 1)\n"
+            f"os.close({pipe_r})\n"
+            "if data == b'\\n':\n"
+            "    os.execvp(sys.argv[1], sys.argv[1:])\n"
+        )
+        unshare_argv = [unshare]
+        if "--pid" in flags and "--fork" not in flags and "-f" not in flags:
+            unshare_argv.append("--fork")
+        unshare_argv.extend(flags)
+        unshare_argv.extend(["python3", "-c", python_script, *holder_cmd])
+    else:
+        unshare_argv = _holder_unshare_argv(unshare, flags)
+
+    popen_kwargs: dict = {
+        "start_new_session": True,
+    }
+    if holder_cmd:
+        # Do not redirect stdout/stderr or start a new session for a user command run in the foreground.
+        popen_kwargs = {}
+        if pipe_r is not None:
+            popen_kwargs["pass_fds"] = (pipe_r,)
+        if env is not None:
+            popen_kwargs["env"] = env
+    else:
+        popen_kwargs["stdout"] = subprocess.DEVNULL
+        popen_kwargs["stderr"] = subprocess.PIPE
+
+    proc = subprocess.Popen(unshare_argv, **popen_kwargs)
 
     success = False
     host_pid: int | None = None
     launch_failed = False
     try:
-        # Up to ~5s: the forked `sleep` grandchild can take a moment to appear
+        # Up to ~5s: the forked grandchild/child process can take a moment to appear
         # under a busy /proc, especially on Android kernels.
         for _ in range(250):
-            host_pid = _pick_new_holder_pid(before_sleep, launcher_pid=proc.pid)
-            if host_pid is not None:
-                break
+            if holder_cmd:
+                assert pipe_r is not None
+                children = _read_host_child_pids(proc.pid)
+                if children:
+                    host_pid = children[0]
+                    break
+                # Fallback to scanning all new PIDs (for Android kernels that hide children)
+                for pid in _snapshot_all_pids() - before_pids:
+                    if _is_custom_holder(pid, pipe_r):
+                        host_pid = pid
+                        break
+                if host_pid is not None:
+                    break
+            else:
+                host_pid = _pick_new_holder_pid(before_sleep, launcher_pid=proc.pid)
+                if host_pid is not None:
+                    break
             if proc.poll() is not None and proc.returncode not in (0, None):
                 launch_failed = True
                 break
@@ -439,7 +514,10 @@ def _create_holder(container_name: str, flags: list[str]) -> NamespaceHolder:
                     proc.kill()
                 _, err = proc.communicate(timeout=2)
                 if err:
-                    stderr_text = err.decode(errors="replace").strip()
+                    if isinstance(err, bytes):
+                        stderr_text = err.decode(errors="replace").strip()
+                    elif isinstance(err, str):
+                        stderr_text = err.strip()
 
             detail = f": {stderr_text}" if stderr_text else ""
             if launch_failed or stderr_text:
@@ -451,9 +529,9 @@ def _create_holder(container_name: str, flags: list[str]) -> NamespaceHolder:
                     "restrict this. Run without --isolate, or check that "
                     "'unshare --pid --mount --uts --ipc --fork sleep infinity' works."
                 )
-            raise NamespaceError("Failed to locate namespace holder process (sleep infinity) on the host.")
+            raise NamespaceError("Failed to locate namespace holder process on the host.")
 
-        if _proc_comm(host_pid) != "sleep":
+        if not holder_cmd and _proc_comm(host_pid) != "sleep":
             raise NamespaceError(f"Namespace holder PID {host_pid} is not a sleep process.")
 
         start_time = _get_process_start_time(host_pid)
@@ -462,6 +540,8 @@ def _create_holder(container_name: str, flags: list[str]) -> NamespaceHolder:
                 fh.write(f"{host_pid}\n{start_time}\n")
             else:
                 fh.write(f"{host_pid}\n")
+            if holder_cmd:
+                fh.write("custom\n")
         with open(flags_file, "w") as fh:
             fh.write(" ".join(flags))
 
@@ -484,16 +564,22 @@ def _create_holder(container_name: str, flags: list[str]) -> NamespaceHolder:
         nsenter_flags=long_flags_to_nsenter(flags, use_long=use_long),
         nsenter_exe=nsenter,
         container_name=container_name,
+        proc=proc if holder_cmd else None,
     )
 
 
-def acquire_holder(container_name: str) -> NamespaceHolder:
+def acquire_holder(
+    container_name: str,
+    holder_cmd: list[str] | None = None,
+    pipe_r: int | None = None,
+    env: dict | None = None,
+) -> NamespaceHolder:
     """Reuse or create a namespace holder for the container."""
     existing = get_live_holder(container_name)
     if existing is not None:
         return existing
     flags = probe_unshare_flags()
-    return _create_holder(container_name, flags)
+    return _create_holder(container_name, flags, holder_cmd=holder_cmd, pipe_r=pipe_r, env=env)
 
 
 def release_holder(container_name: str) -> None:
