@@ -373,6 +373,18 @@ def _read_manifest_labels(name: str) -> tuple[str, str]:
     )
 
 
+def _has_rootfs_structure(rootfs: str) -> bool:
+    """Return True when *rootfs* looks like a real root filesystem.
+
+    A valid rootfs has at least one of the common top-level directories.
+    Distroless/minimal images may omit /etc entirely, so this stays lenient.
+    """
+    for entry in ("bin", "usr", "sbin", "lib", "etc", "system"):
+        if os.path.isdir(os.path.join(rootfs, entry)):
+            return True
+    return False
+
+
 def _analyze_image(info: _ImageInfo, host_arch: str) -> None:
     """Populate findings that help spot why an image may misbehave."""
     rootfs = container_rootfs(info.name)
@@ -382,10 +394,13 @@ def _analyze_image(info: _ImageInfo, host_arch: str) -> None:
 
     if info.size_bytes == 0:
         info.findings.append("rootfs is empty (install may be incomplete)")
-    elif not os.path.isfile(os.path.join(rootfs, "etc", "os-release")) and not os.path.isfile(
-        os.path.join(rootfs, "etc", "passwd")
-    ):
-        info.findings.append("no /etc/os-release or /etc/passwd (unusual rootfs)")
+    elif info.arch in (_NA, "") and not _has_rootfs_structure(rootfs):
+        # Only flag when nothing identifies this as a usable rootfs: arch
+        # detection found no ELF binary and none of the common top-level
+        # directories exist. Minimal/distroless images (e.g. termux-docker)
+        # legitimately lack /etc/os-release and /etc/passwd, so their presence
+        # is no longer required.
+        info.findings.append("no recognizable rootfs layout (install may be incomplete)")
 
     if info.arch not in (_NA, "") and host_arch not in (_NA, ""):
         if info.arch != host_arch and not (host_arch in ("x86_64", "aarch64") and info.arch in ("i686", "arm")):
