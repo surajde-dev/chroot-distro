@@ -648,7 +648,7 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
             "containers. Useful to attach when filing a bug report so issues can "
             "be reproduced and triaged faster."
             "\n\n"
-            "The report covers four sections:"
+            "The report covers five sections:"
             "\n\n"
             "  Program  chroot-distro version, Python version, data location.\n"
             "  Host     On Termux: Termux version, Android release/SDK, device. "
