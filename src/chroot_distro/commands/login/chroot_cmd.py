@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 
+from chroot_distro.commands.login.passwd import resolve_rootfs_path
 from chroot_distro.constants import IS_TERMUX, TERMUX_PREFIX
 from chroot_distro.exceptions import ChrootDistroError
 
@@ -12,8 +13,10 @@ log = logging.getLogger(__name__)
 def _find_rootfs_shell(rootfs: str) -> str | None:
     """Find a usable shell inside the container rootfs, returning its guest path.
 
-    Follows one level of symlink to handle systems with symlinked/moved shells,
-    but only accepts targets that resolve to a real file *inside* the rootfs.
+    Uses chroot-aware symlink resolution so that absolute symlinks
+    (e.g. Alpine's ``/bin/sh → /bin/busybox``) are followed within the
+    rootfs namespace rather than escaping to the host filesystem.
+
     A shell that is only visible because of a bind-mounted host ``$PREFIX``
     (e.g. distroless / rootless images on Termux) is rejected, so the caller
     falls back to running the command directly instead of exec'ing a host
@@ -22,13 +25,17 @@ def _find_rootfs_shell(rootfs: str) -> str | None:
     rootfs_real = os.path.realpath(rootfs)
     for guest_path in ("/bin/sh", f"{TERMUX_PREFIX}/bin/sh", f"{TERMUX_PREFIX}/bin/bash"):
         sh_path = os.path.join(rootfs, guest_path.lstrip("/"))
+        # Fast path: regular file, no symlink resolution needed.
         if os.path.isfile(sh_path) and not os.path.islink(sh_path):
             return guest_path
+        # Chroot-aware resolution: follows symlinks within the rootfs
+        # namespace so absolute targets (e.g. /bin/busybox) are resolved
+        # relative to rootfs, not the host root.
         try:
-            resolved = os.path.realpath(sh_path)
+            resolved = resolve_rootfs_path(rootfs, guest_path)
         except OSError:
             continue
-        # Accept only when the symlink target stays within the rootfs tree.
+        # Accept only when the resolved target is a real file inside rootfs.
         if os.path.isfile(resolved) and os.path.commonpath([rootfs_real, resolved]) == rootfs_real:
             return guest_path
     return None
