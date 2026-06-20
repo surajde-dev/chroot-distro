@@ -75,6 +75,7 @@ function __chroot_distro_no_subcommand
         kill k stop \
         ps diff \
         search find se \
+        info version-info nf \
         help h he hel
 end
 
@@ -126,6 +127,10 @@ function __chroot_distro_seen_search
     __fish_seen_subcommand_from search find se
 end
 
+function __chroot_distro_seen_info
+    __fish_seen_subcommand_from info version-info nf
+end
+
 function __chroot_distro_seen_help
     __fish_seen_subcommand_from help h he hel
 end
@@ -152,6 +157,7 @@ complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a kill        -d 
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a ps          -d 'List running containers'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a diff        -d 'Inspect filesystem changes in a container'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a search      -d 'Search Docker Hub for images'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a info        -d 'Show host and container diagnostics'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a help        -d 'Show help'
 
 # Subcommand aliases (mirrors parser.py)
@@ -174,6 +180,8 @@ complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a k     -d 'Alias
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a stop  -d 'Alias for kill'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a find  -d 'Alias for search'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a se    -d 'Alias for search'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a version-info -d 'Alias for info'
+complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a nf    -d 'Alias for info'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a h     -d 'Alias for help'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a he    -d 'Alias for help'
 complete -c chroot-distro -f -n __chroot_distro_no_subcommand -a hel   -d 'Alias for help'
@@ -455,8 +463,14 @@ complete -c chroot-distro -f -n __chroot_distro_seen_search \
     -s h -l help       -d 'Show help'
 
 # ---------------------------------------------------------------------------
+# info (+ aliases version-info, nf)
+# ---------------------------------------------------------------------------
+complete -c chroot-distro -f -n __chroot_distro_seen_info \
+    -s h -l help       -d 'Show help'
+
+# ---------------------------------------------------------------------------
 # help (+ aliases h, he, hel)
 # ---------------------------------------------------------------------------
 complete -c chroot-distro -f -n __chroot_distro_seen_help \
-    -a 'install remove rename reset login list backup restore clear-cache copy sync run build push unmount kill ps diff search' \
+    -a 'install remove rename reset login list backup restore clear-cache copy sync run build push unmount kill ps diff search info' \
     -d 'Topic'

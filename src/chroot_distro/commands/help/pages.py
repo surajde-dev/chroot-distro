@@ -640,6 +640,35 @@ HELP_PAGES: dict[str, dict[str, typing.Any]] = {
             f"{PROGRAM_NAME} search --limit 50 ubuntu",
         ],
     },
+    "info": {
+        "usage": "info",
+        "aliases": ("version-info", "nf"),
+        "summary": (
+            "Print a structured diagnostics report about the host and installed "
+            "containers. Useful to attach when filing a bug report so issues can "
+            "be reproduced and triaged faster."
+            "\n\n"
+            "The report covers four sections:"
+            "\n\n"
+            "  Program  chroot-distro version, Python version, data location.\n"
+            "  Host     On Termux: Termux version, Android release/SDK, device. "
+            "On Linux: distribution name/version, kernel, libc. Host CPU "
+            "architecture and 32-bit support are shown in both cases.\n"
+            "  Images   Every installed container with rootfs size, detected "
+            "architecture, image source, busy/idle status, plus source URL and "
+            "image type from manifest labels when available.\n"
+            "  Analysis Lightweight checks per image: architecture mismatch "
+            "against the host, missing manifest, empty or unusual rootfs."
+            "\n\n"
+            "Read-only and never requires root."
+        ),
+        "options": [
+            ("-h, --help", "Show this help."),
+        ],
+        "examples": [
+            f"{PROGRAM_NAME} info",
+        ],
+    },
     "sync": {
         "usage": "sync [OPTIONS] [DIST:]SRC [DIST:]DEST",
         "summary": (
@@ -697,4 +726,5 @@ TOP_COMMANDS = [
     ("kill", "Forcibly stop a running container."),
     ("diff", "Inspect filesystem changes in a container."),
     ("search", "Search Docker Hub for images."),
+    ("info", "Show host and container diagnostics for bug reports."),
 ]
