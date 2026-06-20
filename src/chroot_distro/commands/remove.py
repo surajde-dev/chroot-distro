@@ -64,6 +64,25 @@ def _remove_path(path: str, on_remove=None) -> bool:
     return ok
 
 
+def _count_files(path: str) -> int:
+    """Count all directory and file entries recursively under *path*."""
+    count = 0
+    try:
+        count += 1
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        count += _count_files(entry.path)
+                    else:
+                        count += 1
+                except OSError:
+                    count += 1
+    except OSError:
+        return 1
+    return count
+
+
 def command_remove(args) -> None:
     """Delete an installed container's directory tree after stopping running sessions and unmounting."""
     container_name = args.container_name
@@ -140,22 +159,45 @@ def command_remove(args) -> None:
 
         from collections.abc import Callable
 
+        from chroot_distro.progress import clear_bar, draw_count_bar, progress_active
+
+        show_progress = progress_active() and not verbose
+        total_files = 0
+        if show_progress:
+            container_path = container_dir(container_name)
+            if os.path.isdir(container_path):
+                total_files += _count_files(container_path)
+            data_dir = os.path.join(RUNTIME_DIR, "data", container_name)
+            if os.path.isdir(data_dir):
+                total_files += _count_files(data_dir)
+
+        removed_count = 0
+
         on_remove: Callable[[str], None] | None = None
-        if verbose:
+        if verbose or show_progress:
 
             def _on_remove(path: str) -> None:
-                log_info(f"Removed: '{path}'")
+                nonlocal removed_count
+                removed_count += 1
+                if verbose:
+                    log_info(f"Removed: '{path}'")
+                elif show_progress:
+                    draw_count_bar(removed_count, total_files, label="Removing", unit="files")
 
             on_remove = _on_remove
 
-        if not _remove_path(container_dir(container_name), on_remove):
-            log_error("Finished with errors. Some files probably were not deleted.")
-            sys.exit(1)
+        try:
+            if not _remove_path(container_dir(container_name), on_remove):
+                log_error("Finished with errors. Some files probably were not deleted.")
+                sys.exit(1)
 
-        # 4. Clean up the per-container data directory (sessions, isolation.mode, etc.)
-        data_dir = os.path.join(RUNTIME_DIR, "data", container_name)
-        if os.path.isdir(data_dir):
-            _remove_path(data_dir, on_remove)
+            # 4. Clean up the per-container data directory (sessions, isolation.mode, etc.)
+            data_dir = os.path.join(RUNTIME_DIR, "data", container_name)
+            if os.path.isdir(data_dir):
+                _remove_path(data_dir, on_remove)
+        finally:
+            if show_progress:
+                clear_bar()
 
     # The ContainerLock context has now exited and the flock is released;
     # it is safe to delete the lock file itself.

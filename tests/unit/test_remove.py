@@ -1,5 +1,5 @@
 import signal
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, call, patch, ANY
 
 import pytest
 
@@ -70,7 +70,7 @@ def test_remove_no_active_sessions_or_mounts(
     mock_session.reset.assert_called_once_with("alpine")
     mock_mount.unmount_all.assert_called_once_with("/mock/containers/alpine/rootfs", holder=None)
     # _remove_path is called for the container dir, then for the data dir
-    mock_remove_path.assert_any_call("/mock/containers/alpine", None)
+    mock_remove_path.assert_any_call("/mock/containers/alpine", ANY)
     assert mock_remove_path.call_count == 2
     mock_log.assert_any_call("Finished removing the container.")
 
@@ -129,7 +129,7 @@ def test_remove_with_active_sessions_sigterm(
     mock_session.reset.assert_called_once_with("alpine")
     mock_mount.unmount_all.assert_called_once_with("/mock/containers/alpine/rootfs", holder=None)
     # _remove_path is called for the container dir, then for the data dir
-    mock_remove_path.assert_any_call("/mock/containers/alpine", None)
+    mock_remove_path.assert_any_call("/mock/containers/alpine", ANY)
     assert mock_remove_path.call_count == 2
     mock_log.assert_any_call("Finished removing the container.")
 
@@ -190,7 +190,7 @@ def test_remove_with_active_sessions_sigkill(
     mock_session.reset.assert_called_once_with("alpine")
     mock_mount.unmount_all.assert_called_once_with("/mock/containers/alpine/rootfs", holder=None)
     # _remove_path is called for the container dir, then for the data dir
-    mock_remove_path.assert_any_call("/mock/containers/alpine", None)
+    mock_remove_path.assert_any_call("/mock/containers/alpine", ANY)
     assert mock_remove_path.call_count == 2
     mock_log.assert_any_call("Finished removing the container.")
 
@@ -260,3 +260,75 @@ def test_remove_still_busy_mounts(
     mock_crit_error.assert_called_once_with(
         "Cannot remove container 'alpine': the distro is busy. Kill any running processes and try again."
     )
+
+
+def test_count_files(tmp_path):
+    from chroot_distro.commands.remove import _count_files
+
+    # Empty directory
+    assert _count_files(str(tmp_path)) == 1
+
+    # Directory with files
+    (tmp_path / "file1.txt").write_text("hello")
+    (tmp_path / "file2.txt").write_text("world")
+    assert _count_files(str(tmp_path)) == 3
+
+    # Nested directories
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    (subdir / "nested.txt").write_text("nested")
+    assert _count_files(str(tmp_path)) == 5  # tmp_path, file1, file2, subdir, nested.txt
+
+
+@patch("chroot_distro.commands.remove.namespace.get_live_holder", return_value=None)
+@patch("chroot_distro.commands.remove.container_rootfs", return_value="/mock/containers/alpine/rootfs")
+@patch("chroot_distro.commands.remove.container_dir", return_value="/mock/containers/alpine")
+@patch("os.path.isdir", return_value=True)
+@patch("chroot_distro.commands.remove.ContainerLock")
+@patch("chroot_distro.commands.remove.session")
+@patch("chroot_distro.commands.remove.mount_manager")
+@patch("chroot_distro.commands.remove._remove_path", return_value=True)
+@patch("chroot_distro.progress.progress_active", return_value=True)
+@patch("chroot_distro.progress.draw_count_bar")
+@patch("chroot_distro.progress.clear_bar")
+@patch("chroot_distro.commands.remove._count_files", return_value=10)
+@patch("os.unlink")
+def test_remove_progress_bar(
+    mock_unlink,
+    mock_count_files,
+    mock_clear_bar,
+    mock_draw_bar,
+    mock_active,
+    mock_remove_path,
+    mock_mount,
+    mock_session,
+    mock_lock,
+    mock_isdir,
+    mock_dir,
+    mock_rootfs,
+    *_mocks,
+):
+    args = MagicMock()
+    args.container_name = "alpine"
+    args.verbose = False
+
+    mock_session.get_active_chroot_pids.return_value = []
+    mock_mount.get_active_mounts.return_value = []
+
+    # Mock _remove_path to trigger the callback
+    def fake_remove_path(path, on_remove):
+        if on_remove:
+            on_remove("/mock/containers/alpine/somefile")
+        return True
+    mock_remove_path.side_effect = fake_remove_path
+
+    command_remove(args)
+
+    # progress_active should have been checked, and draw_count_bar called
+    mock_active.assert_called()
+    mock_draw_bar.assert_has_calls([
+        call(1, 20, label="Removing", unit="files"),
+        call(2, 20, label="Removing", unit="files"),
+    ])
+    mock_clear_bar.assert_called_once()
+
