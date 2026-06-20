@@ -49,6 +49,7 @@ when needed (see [First-run check](#first-run-check)).
    * [`copy`](#copy--copy-files-to-or-from-a-container)
    * [`sync`](#sync--synchronize-files-to-or-from-a-container)
    * [`clear-cache`](#clear-cache--delete-the-download-cache)
+   * [`info`](#info--show-host-and-container-diagnostics)
    * [`help`](#help--show-command-help)
 3. [How Chroot-Distro works](#how-chroot-distro-works)
 4. [Storage layout](#storage-layout)
@@ -137,8 +138,9 @@ order: `sudo`, `doas`, `pkexec`, or `su`.
 | Termux, default | Prefer `su` (real root) over `sudo`. |
 | Termux, `--use-sudo` or `CHROOT_DISTRO_USE_SUDO=1` | Prefer `sudo` for elevation. |
 
-`list`, `ps`, `search`, and `help` do not require root and are never
-re-executed.
+`list`, `ps`, `search`, `info`, and `help` do not require root on Termux and
+are never re-executed. On regular Linux, `list`, `ps`, and `info` still
+elevate to inspect root-owned data.
 
 ### Quick start
 
@@ -173,6 +175,9 @@ chroot-distro ps
 
 # Search Docker Hub for an image
 chroot-distro search nextcloud
+
+# Print diagnostic report for host and containers
+chroot-distro info
 
 # See what changed in a container relative to its image
 chroot-distro diff ubuntu
@@ -999,6 +1004,27 @@ units.
 
 After `clear-cache`, the next `install` or `reset` of an image requires
 network access again.
+
+---
+
+### `info` — Show host and container diagnostics
+
+```
+chroot-distro info
+Aliases: version-info, nf
+```
+
+Print a structured diagnostics report about the host and installed containers. Useful to attach when filing a bug report so issues can be reproduced and triaged faster.
+
+The report covers five sections:
+
+- **Program** — `chroot-distro` version, Python version, data location.
+- **Host** — On Termux: Termux version, Android release/SDK, device. On Linux: distribution name/version, kernel, libc. Host CPU architecture and 32-bit support are shown in both cases.
+- **Capabilities** — Host checks that affect launching containers: privilege-escalation tool (`sudo`/`doas`/`pkexec`/`su`), Termux `/data` suid/exec flags, `binfmt_misc` + QEMU for foreign architectures, `unshare`/`nsenter` and user-namespace support, free disk space on the data dir, download cache size, and SELinux/AppArmor mode.
+- **Images** — Every installed container with rootfs size, detected architecture, image source, busy/idle status, plus source URL and image type from manifest labels when available.
+- **Analysis** — Lightweight checks per image: architecture mismatch against the host, missing manifest, empty or unusual rootfs.
+
+Like `list` and `ps`, `info` is a read-only command that does not require root on Termux. On regular Linux hosts, it automatically elevates to inspect the same root-owned data directory where containers are installed.
 
 ---
 
