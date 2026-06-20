@@ -1,6 +1,7 @@
 import json
 import os
 import platform
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 
@@ -12,8 +13,11 @@ from chroot_distro.commands.list_cmd import (
     _rootfs_size_bytes,
 )
 from chroot_distro.constants import (
+    BASE_CACHE_DIR,
     CANONICAL_PROGRAM_NAME,
     IS_TERMUX,
+    LAYER_CACHE_DIR,
+    MANIFEST_CACHE_DIR,
     PROGRAM_NAME,
     PROGRAM_VERSION,
     RUNTIME_DIR,
@@ -26,6 +30,11 @@ from chroot_distro.progress import fmt_size, loading_line
 
 _NA = "unknown"
 
+# Marker glyphs reused across capability + analysis rendering.
+_OK = "\u2714"  # heavy check mark
+_BAD = "\u2718"  # heavy ballot X
+_WARN = "\u26a0"  # warning sign
+
 
 @dataclass(frozen=True)
 class _HostInfo:
@@ -33,6 +42,19 @@ class _HostInfo:
 
     kind: str  # "Termux / Android" or "Linux"
     fields: list[tuple[str, str]]
+
+
+@dataclass
+class _Capability:
+    """A single host capability check result for the report.
+
+    ``level`` is one of "ok", "warn", "bad", or "info" and drives the glyph
+    and color used when rendering.
+    """
+
+    label: str
+    value: str
+    level: str = "info"
 
 
 @dataclass
@@ -166,6 +188,170 @@ def _linux_host_info() -> _HostInfo:
 
 def _gather_host_info() -> _HostInfo:
     return _termux_host_info() if IS_TERMUX else _linux_host_info()
+
+
+def _detect_escalation_tool() -> str:
+    """Return the name of the first available privilege-escalation tool, or ''."""
+    for tool in ("sudo", "doas", "pkexec", "su"):
+        if shutil.which(tool):
+            return tool
+    return ""
+
+
+def _data_mount_flags() -> tuple[str, str]:
+    """Return (options, level) describing Termux /data suid/exec flags."""
+    from chroot_distro.helpers.android import _read_data_mount
+
+    entry = _read_data_mount()
+    if not entry:
+        return "not found in /proc/mounts", "warn"
+    _device, _mount, opts = entry
+    problems = [flag for flag in ("nosuid", "noexec") if flag in opts]
+    if problems:
+        return f"{opts} ({', '.join(problems)} breaks sudo/apt)", "warn"
+    return opts, "ok"
+
+
+def _binfmt_qemu_status(needs_emulation: bool) -> tuple[str, str]:
+    """Return (value, level) describing binfmt_misc + QEMU availability."""
+    binfmt_dir = "/proc/sys/fs/binfmt_misc"
+    if not os.path.isdir(binfmt_dir):
+        value = "binfmt_misc not mounted"
+        return value, ("bad" if needs_emulation else "info")
+    qemu_handlers: list[str] = []
+    try:
+        for entry in sorted(os.listdir(binfmt_dir)):
+            if entry.startswith("qemu-"):
+                qemu_handlers.append(entry[len("qemu-") :])
+    except OSError:
+        pass
+    if qemu_handlers:
+        return f"binfmt_misc + qemu ({', '.join(qemu_handlers)})", "ok"
+    value = "binfmt_misc mounted, no qemu handler registered"
+    return value, ("bad" if needs_emulation else "info")
+
+
+def _userns_enabled() -> bool | None:
+    """Return True/False if user-namespace support is known, else None."""
+    path = "/proc/sys/user/max_user_namespaces"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return int(fh.read().strip()) > 0
+    except (OSError, ValueError):
+        return None
+
+
+def _namespace_status() -> tuple[str, str]:
+    """Return (value, level) describing unshare/nsenter + userns support."""
+    tools = [t for t in ("unshare", "nsenter") if shutil.which(t)]
+    if not tools:
+        return "unshare/nsenter not found (--isolated unavailable)", "warn"
+    userns = _userns_enabled()
+    if userns is False:
+        return f"{'+'.join(tools)} present, user namespaces disabled", "warn"
+    if userns is None:
+        return f"{'+'.join(tools)} present", "ok"
+    return f"{'+'.join(tools)} present, user namespaces enabled", "ok"
+
+
+def _free_disk(path: str) -> tuple[str, str]:
+    """Return (value, level) for free space on the filesystem holding *path*."""
+    probe = path
+    while probe and not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    try:
+        usage = shutil.disk_usage(probe or "/")
+    except OSError:
+        return _NA, "info"
+    free_pct = (usage.free * 100 // usage.total) if usage.total else 0
+    value = f"{fmt_size(usage.free)} free of {fmt_size(usage.total)} ({free_pct}%)"
+    level = "warn" if usage.free < (1 << 30) else "info"  # < 1 GiB free
+    return value, level
+
+
+def _dir_size_bytes(path: str) -> int:
+    """Return total file size under *path*, ignoring unreadable entries."""
+    total = 0
+    for dirpath, _dirs, files in os.walk(path, followlinks=False):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, name))
+            except OSError:
+                continue
+    return total
+
+
+def _cache_size() -> tuple[str, str]:
+    """Return (value, level) describing the OCI layer + manifest cache size."""
+    seen: set[str] = set()
+    total = 0
+    for cache_dir in (LAYER_CACHE_DIR, MANIFEST_CACHE_DIR, BASE_CACHE_DIR):
+        real = os.path.realpath(cache_dir)
+        if real in seen or not os.path.isdir(cache_dir):
+            continue
+        seen.add(real)
+        total += _dir_size_bytes(cache_dir)
+    if total == 0:
+        return "empty", "info"
+    return f"{fmt_size(total)} (clear with '{PROGRAM_NAME} clear-cache')", "info"
+
+
+def _lsm_status() -> tuple[str, str] | None:
+    """Return (value, level) for SELinux/AppArmor mode on Linux, or None."""
+    # SELinux: /sys/fs/selinux/enforce -> 1 enforcing, 0 permissive.
+    enforce_path = "/sys/fs/selinux/enforce"
+    if os.path.exists(enforce_path):
+        try:
+            with open(enforce_path, encoding="utf-8") as fh:
+                mode = "enforcing" if fh.read().strip() == "1" else "permissive"
+        except OSError:
+            mode = "present"
+        return f"SELinux {mode}", ("warn" if mode == "enforcing" else "info")
+    # AppArmor: presence of the sysfs module dir.
+    if os.path.isdir("/sys/module/apparmor") or os.path.exists("/sys/kernel/security/apparmor/profiles"):
+        return "AppArmor enabled", "info"
+    return None
+
+
+def _gather_capabilities(images: list["_ImageInfo"], host_arch: str) -> list[_Capability]:
+    """Collect host capability checks relevant to launching containers."""
+    caps: list[_Capability] = []
+
+    is_root = os.getuid() == 0
+    tool = _detect_escalation_tool()
+    if is_root:
+        caps.append(_Capability("Privileges", "running as root", "ok"))
+    elif tool:
+        caps.append(_Capability("Privileges", f"not root, can elevate via {tool}", "info"))
+    else:
+        caps.append(_Capability("Privileges", "not root, no sudo/doas/pkexec/su found", "bad"))
+
+    if IS_TERMUX:
+        value, level = _data_mount_flags()
+        caps.append(_Capability("/data mount", value, level))
+
+    needs_emulation = any("needs emulation" in f for img in images for f in img.findings)
+    binfmt_value, binfmt_level = _binfmt_qemu_status(needs_emulation)
+    caps.append(_Capability("Foreign arch", binfmt_value, binfmt_level))
+
+    ns_value, ns_level = _namespace_status()
+    caps.append(_Capability("Namespaces", ns_value, ns_level))
+
+    if not IS_TERMUX:
+        lsm = _lsm_status()
+        if lsm:
+            caps.append(_Capability("Security module", lsm[0], lsm[1]))
+
+    disk_value, disk_level = _free_disk(RUNTIME_DIR)
+    caps.append(_Capability("Disk (data dir)", disk_value, disk_level))
+
+    cache_value, cache_level = _cache_size()
+    caps.append(_Capability("Download cache", cache_value, cache_level))
+
+    return caps
 
 
 def _read_manifest_labels(name: str) -> tuple[str, str]:
@@ -307,6 +493,42 @@ def _render_images(images: list[_ImageInfo]) -> None:
                 msg(f"    {C['CYAN']}Image type:{C['RST']} {img.image_type}")
 
 
+_CAP_GLYPH = {"ok": (_OK, "GREEN"), "warn": (_WARN, "YELLOW"), "bad": (_BAD, "RED"), "info": ("\u2022", "CYAN")}
+
+
+def _render_capabilities(caps: list[_Capability]) -> None:
+    _render_section("HOST CAPABILITIES")
+    if not caps:
+        msg(f"  {C['CYAN']}No capability checks available.{C['RST']}")
+        return
+    label_w = max(len(c.label) for c in caps) + 1
+    for cap in caps:
+        glyph, color = _CAP_GLYPH.get(cap.level, _CAP_GLYPH["info"])
+        msg(
+            f"  {C[color]}{glyph}{C['RST']} "
+            f"{C['CYAN']}{cap.label + ':':<{label_w}}{C['RST']} "
+            f"{C['WHITE']}{cap.value}{C['RST']}"
+        )
+
+
+def _running_summary(images: list[_ImageInfo]) -> int:
+    """Return the number of containers with live processes or a namespace holder."""
+    if not images:
+        return 0
+    try:
+        from chroot_distro.commands.ps import _is_running
+    except ImportError:
+        return 0
+    count = 0
+    for img in images:
+        try:
+            if _is_running(img.name):
+                count += 1
+        except OSError:
+            continue
+    return count
+
+
 def _render_analysis(images: list[_ImageInfo]) -> None:
     flagged = [i for i in images if i.findings]
     _render_section("ANALYSIS")
@@ -333,10 +555,16 @@ def command_info(args) -> None:
     host_arch = get_device_cpu_arch()
     host = _gather_host_info()
     images = _gather_images(host_arch)
+    capabilities = _gather_capabilities(images, host_arch)
+    running = _running_summary(images)
 
     _render_basic()
     _render_host(host, host_arch)
+    _render_capabilities(capabilities)
     _render_images(images)
+    if images:
+        msg()
+        msg(f"  {C['CYAN']}Running now: {C['WHITE']}{running} of {len(images)} container(s){C['RST']}")
     _render_analysis(images)
 
     msg()
