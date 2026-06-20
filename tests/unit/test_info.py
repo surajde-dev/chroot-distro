@@ -85,6 +85,7 @@ def test_command_info_runs_without_containers():
         patch.object(info, "get_device_cpu_arch", return_value="aarch64"),
         patch.object(info, "_gather_host_info", return_value=info._HostInfo("Linux", [("Kernel", "6.0")])),
         patch.object(info, "supports_32bit", return_value=True),
+        patch.object(info, "_gather_capabilities", return_value=[]),
         patch.object(info, "msg") as mock_msg,
     ):
         info.command_info(MagicMock())
@@ -92,3 +93,61 @@ def test_command_info_runs_without_containers():
     assert mock_msg.called
     rendered = " ".join(str(c.args[0]) for c in mock_msg.call_args_list if c.args)
     assert "No containers are installed." in rendered
+
+
+def test_detect_escalation_tool_prefers_sudo():
+    with patch("shutil.which", side_effect=lambda t: "/usr/bin/sudo" if t == "sudo" else None):
+        assert info._detect_escalation_tool() == "sudo"
+    with patch("shutil.which", return_value=None):
+        assert info._detect_escalation_tool() == ""
+
+
+def test_binfmt_qemu_status_flags_missing_handler_when_emulation_needed():
+    with (
+        patch("os.path.isdir", return_value=True),
+        patch("os.listdir", return_value=["status", "register"]),
+    ):
+        value, level = info._binfmt_qemu_status(needs_emulation=True)
+    assert level == "bad"
+    assert "no qemu handler" in value
+
+
+def test_binfmt_qemu_status_ok_with_handler():
+    with (
+        patch("os.path.isdir", return_value=True),
+        patch("os.listdir", return_value=["qemu-aarch64", "qemu-arm", "status"]),
+    ):
+        value, level = info._binfmt_qemu_status(needs_emulation=True)
+    assert level == "ok"
+    assert "aarch64" in value and "arm" in value
+
+
+def test_namespace_status_warns_when_tools_missing():
+    with patch("shutil.which", return_value=None):
+        value, level = info._namespace_status()
+    assert level == "warn"
+    assert "--isolated" in value
+
+
+def test_data_mount_flags_warns_on_nosuid():
+    with patch("chroot_distro.helpers.android._read_data_mount", return_value=("/dev/x", "/data", "rw,nosuid,noexec")):
+        value, level = info._data_mount_flags()
+    assert level == "warn"
+    assert "nosuid" in value and "noexec" in value
+
+
+def test_gather_capabilities_reports_no_escalation_tool():
+    with (
+        patch("os.getuid", return_value=1000),
+        patch.object(info, "_detect_escalation_tool", return_value=""),
+        patch.object(info, "IS_TERMUX", False),
+        patch.object(info, "_binfmt_qemu_status", return_value=("binfmt_misc + qemu", "ok")),
+        patch.object(info, "_namespace_status", return_value=("unshare present", "ok")),
+        patch.object(info, "_lsm_status", return_value=None),
+        patch.object(info, "_free_disk", return_value=("10 GiB free", "info")),
+        patch.object(info, "_cache_size", return_value=("empty", "info")),
+    ):
+        caps = info._gather_capabilities(images=[], host_arch="x86_64")
+    priv = next(c for c in caps if c.label == "Privileges")
+    assert priv.level == "bad"
+    assert "no sudo" in priv.value
