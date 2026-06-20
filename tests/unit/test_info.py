@@ -68,6 +68,31 @@ def test_analyze_image_flags_empty_rootfs():
     assert any("rootfs is empty" in f for f in img.findings)
 
 
+def test_analyze_image_does_not_flag_minimal_rootfs():
+    # Distroless/termux-docker style: arch detected, but no /etc files.
+    img = info._ImageInfo(name="termux-docker", size_bytes=4096, arch="aarch64")
+    with (
+        patch("os.path.isfile", return_value=True),
+        patch("chroot_distro.commands.info.container_manifest", return_value="/x/manifest.json"),
+        patch("chroot_distro.commands.info.container_rootfs", return_value="/x/rootfs"),
+    ):
+        info._analyze_image(img, host_arch="aarch64")
+    assert not any("rootfs" in f for f in img.findings)
+
+
+def test_analyze_image_flags_unrecognizable_rootfs():
+    # No arch detected and no rootfs structure at all -> flagged.
+    img = info._ImageInfo(name="junk", size_bytes=4096, arch=info._NA)
+    with (
+        patch("os.path.isfile", return_value=True),
+        patch("os.path.isdir", return_value=False),
+        patch("chroot_distro.commands.info.container_manifest", return_value="/x/manifest.json"),
+        patch("chroot_distro.commands.info.container_rootfs", return_value="/x/rootfs"),
+    ):
+        info._analyze_image(img, host_arch="aarch64")
+    assert any("no recognizable rootfs layout" in f for f in img.findings)
+
+
 def test_analyze_image_no_arch_flag_for_compatible_32bit():
     img = info._ImageInfo(name="i386", size_bytes=2048, arch="i686")
     with (
