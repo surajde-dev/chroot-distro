@@ -6,10 +6,9 @@ import chroot_distro.commands.info as info
 def test_read_os_release_parses_quoted_values(tmp_path):
     f = tmp_path / "os-release"
     f.write_text('PRETTY_NAME="Ubuntu 25.10"\nVERSION_ID="25.10"\n# comment\nNAME=Ubuntu\n')
-    with patch.object(info, "open", create=False):
-        pass
-    # Patch the candidate paths to point at our temp file.
-    with patch("builtins.open", side_effect=lambda *a, **k: open(f, *a[1:], **k)):
+    real_open = open
+    # Redirect the candidate os-release paths to our temp file.
+    with patch("builtins.open", side_effect=lambda *a, **k: real_open(f, *a[1:], **k)):
         data = info._read_os_release()
     assert data["PRETTY_NAME"] == "Ubuntu 25.10"
     assert data["VERSION_ID"] == "25.10"
